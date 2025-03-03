@@ -550,6 +550,14 @@ Project::Project(const Project *parent, const std::string &path, bool build) : p
                         algo.push_back(ch);
                     }
                     key = "URL_HASH";
+                    if (value.empty()) {
+                        throw_key_error("Empty hash value", argItr.first, argItr.second);
+                    }
+                    for (char c : value) {
+                        if (!std::isxdigit(c)) {
+                            throw_key_error("Hash value must be a hex string", argItr.first, argItr.second);
+                        }
+                    }
                     value = algo + "=" + value;
                 } else if (key == "hash") {
                     key = "URL_HASH";
@@ -648,29 +656,28 @@ Project::Project(const Project *parent, const std::string &path, bool build) : p
         // Add support for relative paths for (private-)link-libraries
         const auto fix_relative_paths = [&name, &path](ConditionVector &libraries, const char *key) {
             for (const auto &library_entries : libraries) {
-                for (auto &library_path : libraries[library_entries.first]) {
+                for (auto &library : libraries[library_entries.first]) {
                     // Skip processing paths with potential CMake macros in them (this check isn't perfect)
                     // https://cmake.org/cmake/help/latest/manual/cmake-language.7.html#variable-references
-                    if ((library_path.find("${") != std::string::npos || library_path.find("$ENV{") != std::string::npos ||
-                         library_path.find("$CACHE{") != std::string::npos) &&
-                        library_path.find('}') != std::string::npos) {
+                    if ((library.find("${") != std::string::npos || library.find("$ENV{") != std::string::npos ||
+                         library.find("$CACHE{") != std::string::npos) &&
+                        library.find('}') != std::string::npos) {
                         continue;
                     }
 
-                    // Skip paths that don't contain backwards or forwards slashes
-                    if (library_path.find_first_of(R"(\/)") == std::string::npos) {
-                        continue;
-                    }
-
-                    // Check if the new file path exists, otherwise emit an error
-                    const auto expected_library_file_path = fs::path{path} / library_path;
-                    if (!fs::exists(expected_library_file_path)) {
+                    auto library_path = fs::path(path) / library;
+                    if (fs::exists(library_path)) {
+                        if (!fs::is_directory(library_path)) {
+                            // If the file path is relative (and not a directory), prepend ${CMAKE_CURRENT_SOURCE_DIR}
+                            library.insert(0, "${CMAKE_CURRENT_SOURCE_DIR}/");
+                        }
+                    } else if (library.find_first_of(R"(\/)") != std::string::npos) {
+                        // Error if the path contains a directory separator and the file doesn't exist
                         throw std::runtime_error("Attempted to link against a library file that doesn't exist for target \"" + name + "\" in \"" +
-                                                 key + "\": " + library_path);
+                                                 key + "\": " + library);
+                    } else {
+                        // NOTE: We cannot check if system libraries exist, so we leave them as-is
                     }
-
-                    // Prepend ${CMAKE_CURRENT_SOURCE_DIR} to the path
-                    library_path.insert(0, "${CMAKE_CURRENT_SOURCE_DIR}/");
                 }
             }
         };
@@ -843,12 +850,32 @@ Project::Project(const Project *parent, const std::string &path, bool build) : p
                 std::istringstream feature_stream{features};
                 std::string feature;
                 while (std::getline(feature_stream, feature, ',')) {
-                    package.features.emplace_back(feature);
+                    // Disable default features with package-name[core,feature1]
+                    if (feature == "core") {
+                        package.default_features = false;
+                    } else {
+                        package.features.emplace_back(feature);
+                    }
                 }
             } else {
                 throw_key_error("Invalid package name '" + package_str + "'", "packages", p);
             }
             vcpkg.packages.emplace_back(std::move(package));
+        }
+
+        if (v.contains("overlay")) {
+            std::string overlay;
+            v.optional("overlay", overlay);
+            vcpkg.overlay_triplets = vcpkg.overlay_ports = {overlay};
+            if (v.contains("overlay-ports")) {
+                throw_key_error("[vcpkg].overlay was already specified", "overlay-ports", v.find("overlay-ports"));
+            }
+            if (v.contains("overlay-triplets")) {
+                throw_key_error("[vcpkg].overlay was already specified", "overlay-triplets", v.find("overlay-triplets"));
+            }
+        } else {
+            v.optional("overlay-ports", vcpkg.overlay_ports);
+            v.optional("overlay-triplets", vcpkg.overlay_triplets);
         }
     }
 

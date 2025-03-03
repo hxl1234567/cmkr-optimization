@@ -17,4 +17,4 @@ nav_order: @EXAMPLE_INDEX@
 
 @EXAMPLE_FOOTER@
 
-<sup><sub>This page was automatically generated from [tests/@EXAMPLE_PERMALINK@/cmake.toml](https://github.com/build-cpp/cmkr/tree/main/tests/@EXAMPLE_PERMALINK@/cmake.toml).</sub></sup>
+<sup><sub>This page was automatically generated from [tests/@EXAMPLE_PERMALINK@/cmake.toml](https://gitee.com/hxl3/cmkr/tree/main/tests/@EXAMPLE_PERMALINK@/cmake.toml).</sub></sup>
