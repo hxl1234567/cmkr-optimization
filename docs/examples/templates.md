@@ -37,4 +37,4 @@ compile-definitions = ["APP_B"]
 
 **Note**: In most cases you probably want to use an [interface](/examples/interface) target instead.
 
-<sup><sub>This page was automatically generated from [tests/templates/cmake.toml](https://github.com/build-cpp/cmkr/tree/main/tests/templates/cmake.toml).</sub></sup>
+<sup><sub>This page was automatically generated from [tests/templates/cmake.toml](https://gitee.com/hxl3/cmkr/tree/main/tests/templates/cmake.toml).</sub></sup>

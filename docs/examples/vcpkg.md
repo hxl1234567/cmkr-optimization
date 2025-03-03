@@ -34,4 +34,4 @@ The bootstrapping of vcpkg is fully automated and no user interaction is necessa
 
 To specify package features you can use the following syntax: `imgui[docking-experimental,freetype,sdl2-binding,opengl3-binding]`.
 
-<sup><sub>This page was automatically generated from [tests/vcpkg/cmake.toml](https://github.com/build-cpp/cmkr/tree/main/tests/vcpkg/cmake.toml).</sub></sup>
+<sup><sub>This page was automatically generated from [tests/vcpkg/cmake.toml](https://gitee.com/hxl3/cmkr/tree/main/tests/vcpkg/cmake.toml).</sub></sup>

@@ -29,4 +29,4 @@ link-libraries = ["mylib"]
 
 
 
-<sup><sub>This page was automatically generated from [tests/interface/cmake.toml](https://github.com/build-cpp/cmkr/tree/main/tests/interface/cmake.toml).</sub></sup>
+<sup><sub>This page was automatically generated from [tests/interface/cmake.toml](https://gitee.com/hxl3/cmkr/tree/main/tests/interface/cmake.toml).</sub></sup>
