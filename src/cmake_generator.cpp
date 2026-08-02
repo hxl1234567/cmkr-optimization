@@ -106,6 +106,33 @@ static std::vector<fs::path> expand_cmake_path(const fs::path &source_path, cons
         return path.rfind(extension) == path.length() - extension.length();
     };
 
+    // Known source/header extensions (lowercased) for bare-directory scanning
+    static const tsl::ordered_set<std::string> known_source_extensions = []() {
+        tsl::ordered_set<std::string> exts;
+        for (const auto &lang : known_languages) {
+            for (const auto &ext : lang.second) {
+                std::string lower_ext;
+                for (auto ch : ext) {
+                    lower_ext += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                }
+                exts.insert(lower_ext);
+            }
+        }
+        // Header extensions are not language source extensions in CMake, add them explicitly
+        for (auto *hdr : {".h", ".hpp", ".hh", ".hxx", ".h++", ".inl", ".ipp", ".txx"}) {
+            exts.insert(hdr);
+        }
+        return exts;
+    }();
+    auto is_source_file = [](const fs::path &p) {
+        auto ext = p.extension().string();
+        std::string lower_ext;
+        for (auto ch : ext) {
+            lower_ext += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        }
+        return known_source_extensions.contains(lower_ext);
+    };
+
     std::vector<fs::path> paths;
     if (stem == "*") {
         const auto directory = toml_dir / source_path.parent_path();
@@ -128,7 +155,17 @@ static std::vector<fs::path> expand_cmake_path(const fs::path &source_path, cons
             }
         }
     } else {
-        paths.push_back(source_path);
+        const auto abs_dir = toml_dir / source_path;
+        if (fs::is_directory(abs_dir)) {
+            // Bare directory → recursive scan, filtered by known source extensions
+            for (const auto &f : fs::recursive_directory_iterator(abs_dir, fs::directory_options::follow_directory_symlink)) {
+                if (!f.is_directory() && is_source_file(f.path())) {
+                    paths.push_back(fs::relative(f, toml_dir));
+                }
+            }
+        } else {
+            paths.push_back(source_path);
+        }
     }
 
     return paths;
