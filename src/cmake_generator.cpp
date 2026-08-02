@@ -82,9 +82,11 @@ static std::vector<fs::path> expand_cmake_path(const fs::path &source_path, cons
         }
         return false;
     };
-    if (!is_subdir(fs::absolute(toml_dir / source_path), toml_dir)) {
-        throw std::runtime_error("Path traversal is not allowed: " + source_path.string());
-    }
+    // External paths (outside toml_dir) are allowed; they are emitted as absolute paths.
+    const bool is_external = !is_subdir(fs::absolute(toml_dir / source_path), toml_dir);
+    auto push_path = [&toml_dir, is_external](std::vector<fs::path> &out, const fs::path &p) {
+        out.push_back(is_external ? fs::absolute(p) : fs::relative(p, toml_dir));
+    };
 
     // Split the path at the first period (since fs::path::stem() and fs::path::extension() split at the last period)
     std::string stem, extension;
@@ -141,7 +143,7 @@ static std::vector<fs::path> expand_cmake_path(const fs::path &source_path, cons
         }
         for (const auto &f : fs::directory_iterator(directory, fs::directory_options::follow_directory_symlink)) {
             if (!f.is_directory() && has_extension(f.path(), extension)) {
-                paths.push_back(fs::relative(f, toml_dir));
+                push_path(paths, f.path());
             }
         }
     } else if (stem == "**") {
@@ -151,7 +153,7 @@ static std::vector<fs::path> expand_cmake_path(const fs::path &source_path, cons
         }
         for (const auto &f : fs::recursive_directory_iterator(directory, fs::directory_options::follow_directory_symlink)) {
             if (!f.is_directory() && has_extension(f.path(), extension)) {
-                paths.push_back(fs::relative(f, toml_dir));
+                push_path(paths, f.path());
             }
         }
     } else {
@@ -160,11 +162,11 @@ static std::vector<fs::path> expand_cmake_path(const fs::path &source_path, cons
             // Bare directory → recursive scan, filtered by known source extensions
             for (const auto &f : fs::recursive_directory_iterator(abs_dir, fs::directory_options::follow_directory_symlink)) {
                 if (!f.is_directory() && is_source_file(f.path())) {
-                    paths.push_back(fs::relative(f, toml_dir));
+                    push_path(paths, f.path());
                 }
             }
         } else {
-            paths.push_back(source_path);
+            paths.push_back(is_external ? fs::absolute(source_path) : source_path);
         }
     }
 
@@ -1821,9 +1823,29 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
                 cmd("add_library")(target.alias, "ALIAS", target.name);
             }
 
-            auto target_cmd = [&](const char *command, const parser::ConditionVector &cargs, const std::string &scope) {
+            auto target_cmd = [&](const char *command, const parser::ConditionVector &cargs, const std::string &scope, bool expand_subdirs = false) {
                 gen.handle_condition(cargs, [&](const std::string &, const std::vector<std::string> &args) {
-                    cmd(command)(target.name, scope, args);
+                    std::vector<std::string> expanded;
+                    for (const auto &arg : args) {
+                        if (expand_subdirs && arg.size() > 3 && arg.compare(arg.size() - 3, 3, "/**") == 0) {
+                            // "dir/**" → "dir" + every subdirectory under it
+                            auto base = arg.substr(0, arg.size() - 3);
+                            expanded.push_back(base);
+                            fs::path d = fs::path(path) / base;
+                            if (fs::is_directory(d)) {
+                                for (const auto &f : fs::recursive_directory_iterator(d, fs::directory_options::follow_directory_symlink)) {
+                                    if (f.is_directory()) {
+                                        auto rel = fs::relative(f.path(), path).string();
+                                        std::replace(rel.begin(), rel.end(), '\\', '/');
+                                        expanded.push_back(rel);
+                                    }
+                                }
+                            }
+                        } else {
+                            expanded.push_back(arg);
+                        }
+                    }
+                    cmd(command)(target.name, scope, expanded);
                 });
             };
 
@@ -1858,8 +1880,8 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
                     target_cmd("target_compile_options", t.compile_options, target_scope);
                     target_cmd("target_compile_options", t.private_compile_options, "PRIVATE");
 
-                    target_cmd("target_include_directories", t.include_directories, target_scope);
-                    target_cmd("target_include_directories", t.private_include_directories, "PRIVATE");
+                    target_cmd("target_include_directories", t.include_directories, target_scope, true);
+                    target_cmd("target_include_directories", t.private_include_directories, "PRIVATE", true);
 
                     target_cmd("target_link_directories", t.link_directories, target_scope);
                     target_cmd("target_link_directories", t.private_link_directories, "PRIVATE");
