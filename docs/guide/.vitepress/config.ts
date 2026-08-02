@@ -9,7 +9,8 @@ export default defineConfig({
   cleanUrls: true,
 
   head: [
-    ['meta', { name: 'theme-color', content: '#3aa675' }]
+    ['meta', { name: 'theme-color', content: '#0EA5E9' }],
+    ['link', { rel: 'icon', type: 'image/x-icon', href: '/cmkr.ico' }]
   ],
 
   themeConfig: {
