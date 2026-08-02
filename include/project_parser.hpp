@@ -205,6 +205,10 @@ struct Target {
 
     ConditionVector dependencies;
 
+    ConditionVector post_build;
+    Condition<bool> win32_executable;
+    Condition<std::string> entry_point;
+
     CustomTarget custom_target;
     std::vector<CustomCommand> custom_commands;
 
@@ -291,6 +295,7 @@ struct Project {
     std::string generator;
     std::string config;
     bool allow_in_tree = false;
+    bool utf8 = true;
     Condition<std::vector<std::string>> project_subdirs;
     std::vector<std::string> cppflags;
     std::vector<std::string> cflags;

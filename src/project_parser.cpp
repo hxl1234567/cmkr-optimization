@@ -335,6 +335,7 @@ Project::Project(const Project *parent, const std::string &path, bool build) : p
         cmake.optional("config", config);
         cmake.optional("arguments", gen_args);
         cmake.optional("allow-in-tree", allow_in_tree);
+        cmake.optional("utf-8", utf8);
 
         if (cmake.contains("cmkr-include")) {
             const auto &cmkr_include_kv = cmake.find("cmkr-include");
@@ -1151,6 +1152,10 @@ Project::Project(const Project *parent, const std::string &path, bool build) : p
                 }
             }
         }
+
+        t.optional("post-build", target.post_build);
+        t.optional("win32-executable", target.win32_executable);
+        t.optional("entry-point", target.entry_point);
 
         t.optional("cmake-before", target.cmake_before);
         t.optional("cmake-after", target.cmake_after);

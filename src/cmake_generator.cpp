@@ -5,6 +5,7 @@
 #include "fs.hpp"
 #include "project_parser.hpp"
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <memory>
 #include <sstream>
@@ -979,6 +980,13 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
     gen.conditional_includes(project.include_after);
     gen.conditional_cmake(project.cmake_after);
 
+    // [cmake] utf-8 = true (default) → add_compile_options(/utf-8) on MSVC
+    if (project.utf8) {
+        cmd("if")("MSVC");
+        cmd("add_compile_options")("/utf-8").endl();
+        cmd("endif")().endl();
+    }
+
     if (project.vcpkg.enabled()) {
         if (!is_root_project) {
             throw std::runtime_error("[vcpkg] is only supported in the root project");
@@ -1877,6 +1885,46 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
             }
             gen.conditional_includes(target.include_after);
             gen.conditional_cmake(target.cmake_after);
+
+            // post-build: one POST_BUILD add_custom_command per entry; .bat/.cmd → cmd /c
+            gen.handle_condition(target.post_build, [&](const std::string &, const std::vector<std::string> &commands) {
+                for (const auto &command : commands) {
+                    auto cmd_line = command;
+                    auto prefix = cmd_line.substr(0, 7);
+                    std::transform(prefix.begin(), prefix.end(), prefix.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                    auto ext = cmd_line.size() >= 4 ? cmd_line.substr(cmd_line.size() - 4) : "";
+                    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                    if ((ext == ".bat" || ext == ".cmd") && prefix != "cmd /c ") {
+                        cmd_line = "cmd /c " + cmd_line;
+                    }
+                    cmd("add_custom_command")("TARGET", target.name, "POST_BUILD", "COMMAND", RawArg(cmd_line)).endl();
+                }
+            });
+
+            // win32-executable: GUI subsystem (WIN32_EXECUTABLE + MSVC /SUBSYSTEM:WINDOWS /ENTRY)
+            if (target_type == parser::target_executable) {
+                for (const auto &itr : target.win32_executable) {
+                    if (!itr.second) {
+                        continue;
+                    }
+                    auto endif = gen.if_condition(itr.first);
+                    cmd("set_target_properties")(target.name, "PROPERTIES", "WIN32_EXECUTABLE", "ON").endl();
+                    std::string entry_point = "wWinMainCRTStartup";
+                    auto entry_found = target.entry_point.find("");
+                    if (entry_found != target.entry_point.end()) {
+                        entry_point = entry_found->second;
+                    }
+                    cmd("if")("MSVC");
+                    cmd("target_link_options")(target.name, "PRIVATE", "/SUBSYSTEM:WINDOWS /ENTRY:" + entry_point).endl();
+                    cmd("endif")().endl();
+                    if (endif) {
+                        cmd("endif")().endl();
+                    } else {
+                        endl();
+                    }
+                }
+            }
+
             if (tmplate != nullptr) {
                 gen.conditional_includes(tmplate->outline.include_after);
                 gen.conditional_cmake(tmplate->outline.cmake_after);
