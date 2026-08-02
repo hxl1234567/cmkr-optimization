@@ -20,7 +20,7 @@ sources = ["src/main.cpp"]
 To get started, run the following commands from your project directory:
 
 ```sh
-curl https://raw.githubusercontent.com/build-cpp/cmkr/main/cmake/cmkr.cmake -o cmkr.cmake
+curl https://gitee.com/cmkr_lib/cmkr/raw/master/cmake/cmkr.cmake -o cmkr.cmake
 cmake -P cmkr.cmake
 ```
 
@@ -46,11 +46,11 @@ cmake -B build
 cmake --build build
 ```
 
-Check out the [cmkr topic](https://github.com/topics/cmkr), the [build-cpp organization](https://github.com/build-cpp) or the [tests](https://github.com/build-cpp/cmkr/tree/main/tests) for more examples and templates.
+Check out the [cmkr topic](https://github.com/topics/cmkr), the [build-cpp organization](https://github.com/build-cpp) or the [tests](https://gitee.com/cmkr_lib/cmkr/tree/main/tests) for more examples and templates.
 
 ## Command line
 
-Optionally you can put a [`cmkr` release](https://github.com/build-cpp/cmkr/releases) in your `PATH` and use it as a utility from the command line:
+Optionally you can put a [`cmkr` release](https://gitee.com/cmkr_lib/cmkr/releases) in your `PATH` and use it as a utility from the command line:
 
 ```
 Usage: cmkr [arguments]

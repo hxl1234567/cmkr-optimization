@@ -1,6 +1,7 @@
 #include "project_parser.hpp"
 
 #include "fs.hpp"
+#include <cctype>
 #include <deque>
 #include <stdexcept>
 #include <toml.hpp>
@@ -209,6 +210,105 @@ class TomlCheckerRoot {
     }
 };
 
+static std::vector<std::string> parse_string_array(const TomlBasicValue &value, const toml::key &key) {
+    if (!value.is_array()) {
+        throw_key_error("Expected an array", key, value);
+    }
+    std::vector<std::string> values;
+    for (const auto &entry : value.as_array()) {
+        if (!entry.is_string()) {
+            throw_key_error("Expected an array of strings", key, entry);
+        }
+        values.push_back(entry.as_string());
+    }
+    return values;
+}
+
+static std::vector<std::vector<std::string>> parse_command_arguments(const TomlBasicValue &value, const toml::key &key) {
+    if (!value.is_array()) {
+        throw_key_error("Expected an array", key, value);
+    }
+    const auto &array = value.as_array();
+    if (array.empty()) {
+        return {};
+    }
+
+    bool all_strings = true;
+    bool all_arrays = true;
+    for (const auto &entry : array) {
+        if (!entry.is_string()) {
+            all_strings = false;
+        }
+        if (!entry.is_array()) {
+            all_arrays = false;
+        }
+    }
+
+    std::vector<std::vector<std::string>> commands;
+    if (all_strings) {
+        commands.push_back(parse_string_array(value, key));
+        if (commands[0].empty()) {
+            throw_key_error("Command arrays cannot be empty", key, value);
+        }
+        return commands;
+    }
+
+    if (!all_arrays) {
+        throw_key_error("Expected an array of command arrays", key, value);
+    }
+
+    for (const auto &entry : array) {
+        auto command = parse_string_array(entry, key);
+        if (command.empty()) {
+            throw_key_error("Command arrays cannot be empty", key, entry);
+        }
+        commands.push_back(std::move(command));
+    }
+
+    return commands;
+}
+
+static std::vector<Target::CustomCommand::ImplicitDependency> parse_implicit_dependencies(const TomlBasicValue &value, const toml::key &key) {
+    if (!value.is_array()) {
+        throw_key_error("Expected an array", key, value);
+    }
+    std::vector<Target::CustomCommand::ImplicitDependency> implicit_dependencies;
+    for (const auto &entry : value.as_array()) {
+        auto values = parse_string_array(entry, key);
+        if (values.size() != 2) {
+            throw_key_error("Each implicit dependency must have exactly two strings: [language, file]", key, entry);
+        }
+        Target::CustomCommand::ImplicitDependency implicit_dependency;
+        implicit_dependency.language = std::move(values[0]);
+        implicit_dependency.file = std::move(values[1]);
+        implicit_dependencies.push_back(std::move(implicit_dependency));
+    }
+    return implicit_dependencies;
+}
+
+static std::string normalize_build_event(std::string build_event) {
+    for (auto &ch : build_event) {
+        if (ch == '-') {
+            ch = '_';
+        } else {
+            ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        }
+    }
+    return build_event;
+}
+
+static TargetType resolve_target_type(const Target &target, const std::vector<Template> &templates) {
+    if (target.type != target_template) {
+        return target.type;
+    }
+    for (const auto &tmplate : templates) {
+        if (target.type_name == tmplate.outline.name) {
+            return tmplate.outline.type;
+        }
+    }
+    return target.type;
+}
+
 Project::Project(const Project *parent, const std::string &path, bool build) : parent(parent) {
     const auto toml_path = fs::path(path) / "cmake.toml";
     if (!fs::exists(toml_path)) {
@@ -301,6 +401,11 @@ Project::Project(const Project *parent, const std::string &path, bool build) : p
         project.required("name", project_name);
         project.optional("version", project_version);
         project.optional("description", project_description);
+
+        // The implicit default is ["C", "CXX"], so make sure this list isn't
+        // empty or projects without languages explicitly defined will error.
+        project_languages[""] = {"C", "CXX"};
+
         project.optional("languages", project_languages);
         project.optional("allow-unknown-languages", project_allow_unknown_languages);
         project.optional("cmake-before", cmake_before);
@@ -440,18 +545,19 @@ Project::Project(const Project *parent, const std::string &path, bool build) : p
             options.push_back(o);
 
             // Add a condition matching the option name
-            conditions.emplace(o.name, o.name);
+            if (!conditions.emplace(o.name, o.name).second) {
+                print_key_warning("Option '" + o.name + "' would create a condition '" + o.name + "' that already exists", o.name, value);
+            }
 
             // Add an implicit condition for the option
             auto ncondition = normalize(o.name);
             if (ncondition.find(nproject_prefix) == 0) {
                 ncondition = ncondition.substr(nproject_prefix.size());
             }
-            if (!ncondition.empty()) {
-                if (conditions.contains(ncondition)) {
+            if (!ncondition.empty() && ncondition != o.name) {
+                if (!conditions.emplace(ncondition, o.name).second) {
                     print_key_warning("Option '" + o.name + "' would create a condition '" + ncondition + "' that already exists", o.name, value);
                 }
-                conditions.emplace(ncondition, o.name);
             }
         }
     }
@@ -499,7 +605,42 @@ Project::Project(const Project *parent, const std::string &path, bool build) : p
                                 "system", "");
             }
 
+            // Parse options table - these are CACHE variables set before FetchContent
+            if (c.contains("options")) {
+                c.visit("options");
+                const auto &opts = toml::find(itr.second, "options").as_table();
+                for (const auto &optItr : opts) {
+                    ContentOption opt;
+                    if (optItr.second.is_boolean()) {
+                        opt.value = optItr.second.as_boolean();
+                    } else if (optItr.second.is_array()) {
+                        // Arrays become semicolon-separated lists
+                        std::string list_value;
+                        for (const auto &list_val : optItr.second.as_array()) {
+                            if (!list_val.is_string()) {
+                                throw_key_error("Expected an array of strings", optItr.first, list_val);
+                            }
+                            if (!list_value.empty()) {
+                                list_value += ';';
+                            }
+                            list_value += list_val.as_string();
+                        }
+                        opt.value = list_value;
+                    } else if (optItr.second.is_string()) {
+                        opt.value = optItr.second.as_string();
+                    } else {
+                        throw_key_error("Expected a boolean, string, or array of strings", optItr.first, optItr.second);
+                    }
+                    content.options.emplace(optItr.first, opt);
+                }
+            }
+
             for (const auto &argItr : itr.second.as_table()) {
+                // Skip keys that were already handled (like "options")
+                if (c.visisted(argItr.first)) {
+                    continue;
+                }
+
                 std::string value;
                 if (argItr.second.is_array()) {
                     for (const auto &list_val : argItr.second.as_array()) {
@@ -563,8 +704,6 @@ Project::Project(const Project *parent, const std::string &path, bool build) : p
                     key = "URL_HASH";
                 } else if (key == "subdir") {
                     key = "SOURCE_SUBDIR";
-                } else if (key == "dir") {
-                    key = "SOURCE_DIR";
                 } else if (is_cmake_arg(key)) {
                     // allow passthrough of ExternalProject options
                 } else if (!c.visisted(key)) {
@@ -625,6 +764,8 @@ Project::Project(const Project *parent, const std::string &path, bool build) : p
             throw_key_error(error, target.type_name, t.find("type"));
         }
 
+        const auto resolved_target_type = resolve_target_type(target, templates);
+
         t.optional("sources", target.sources);
 
         // Merge the headers into the sources
@@ -637,60 +778,314 @@ Project::Project(const Project *parent, const std::string &path, bool build) : p
             }
         }
 
-        t.optional("compile-definitions", target.compile_definitions);
-        t.optional("private-compile-definitions", target.private_compile_definitions);
+        // These keys configure compilation/linking, which doesn't apply to add_custom_target. Leaving them
+        // unvisited for type = "custom" lets the generic "Unknown key" check below reject them.
+        if (resolved_target_type != target_custom) {
+            t.optional("compile-definitions", target.compile_definitions);
+            t.optional("private-compile-definitions", target.private_compile_definitions);
 
-        t.optional("compile-features", target.compile_features);
-        t.optional("private-compile-features", target.private_compile_features);
+            t.optional("compile-features", target.compile_features);
+            t.optional("private-compile-features", target.private_compile_features);
 
-        t.optional("compile-options", target.compile_options);
-        t.optional("private-compile-options", target.private_compile_options);
+            t.optional("compile-options", target.compile_options);
+            t.optional("private-compile-options", target.private_compile_options);
 
-        t.optional("include-directories", target.include_directories);
-        t.optional("private-include-directories", target.private_include_directories);
+            t.optional("include-directories", target.include_directories);
+            t.optional("private-include-directories", target.private_include_directories);
 
-        t.optional("link-directories", target.link_directories);
-        t.optional("private-link-directories", target.private_link_directories);
+            t.optional("link-directories", target.link_directories);
+            t.optional("private-link-directories", target.private_link_directories);
 
-        t.optional("link-libraries", target.link_libraries);
-        t.optional("private-link-libraries", target.private_link_libraries);
+            t.optional("link-libraries", target.link_libraries);
+            t.optional("private-link-libraries", target.private_link_libraries);
 
-        // Add support for relative paths for (private-)link-libraries
-        const auto fix_relative_paths = [&name, &path](ConditionVector &libraries, const char *key) {
-            for (const auto &library_entries : libraries) {
-                for (auto &library : libraries[library_entries.first]) {
-                    // Skip processing paths with potential CMake macros in them (this check isn't perfect)
-                    // https://cmake.org/cmake/help/latest/manual/cmake-language.7.html#variable-references
-                    if ((library.find("${") != std::string::npos || library.find("$ENV{") != std::string::npos ||
-                         library.find("$CACHE{") != std::string::npos) &&
-                        library.find('}') != std::string::npos) {
-                        continue;
-                    }
-
-                    auto library_path = fs::path(path) / library;
-                    if (fs::exists(library_path)) {
-                        if (!fs::is_directory(library_path)) {
-                            // If the file path is relative (and not a directory), prepend ${CMAKE_CURRENT_SOURCE_DIR}
-                            library.insert(0, "${CMAKE_CURRENT_SOURCE_DIR}/");
+            // Add support for relative paths for (private-)link-libraries
+            const auto fix_relative_paths = [&name, &path](ConditionVector &libraries, const char *key) {
+                for (const auto &library_entries : libraries) {
+                    for (auto &library : libraries[library_entries.first]) {
+                        // Skip processing paths with potential CMake macros in them (this check isn't perfect)
+                        // https://cmake.org/cmake/help/latest/manual/cmake-language.7.html#variable-references
+                        if ((library.find("${") != std::string::npos || library.find("$ENV{") != std::string::npos ||
+                             library.find("$CACHE{") != std::string::npos) &&
+                            library.find('}') != std::string::npos) {
+                            continue;
                         }
-                    } else if (library.find_first_of(R"(\/)") != std::string::npos) {
-                        // Error if the path contains a directory separator and the file doesn't exist
-                        throw std::runtime_error("Attempted to link against a library file that doesn't exist for target \"" + name + "\" in \"" +
-                                                 key + "\": " + library);
-                    } else {
-                        // NOTE: We cannot check if system libraries exist, so we leave them as-is
+
+                        auto library_path = fs::path(path) / library;
+                        if (fs::exists(library_path)) {
+                            if (!fs::is_directory(library_path)) {
+                                // If the file path is relative (and not a directory), prepend ${CMAKE_CURRENT_SOURCE_DIR}
+                                library.insert(0, "${CMAKE_CURRENT_SOURCE_DIR}/");
+                            }
+                        } else if (library.find_first_of(R"(\/)") != std::string::npos) {
+                            // Error if the path contains a directory separator and the file doesn't exist
+                            throw std::runtime_error("Attempted to link against a library file that doesn't exist for target \"" + name + "\" in \"" +
+                                                     key + "\": " + library);
+                        } else {
+                            // NOTE: We cannot check if system libraries exist, so we leave them as-is
+                        }
                     }
                 }
+            };
+            fix_relative_paths(target.link_libraries, "link-libraries");
+            fix_relative_paths(target.private_link_libraries, "private-link-libraries");
+
+            t.optional("link-options", target.link_options);
+            t.optional("private-link-options", target.private_link_options);
+
+            t.optional("precompile-headers", target.precompile_headers);
+            t.optional("private-precompile-headers", target.private_precompile_headers);
+        }
+
+        t.optional("dependencies", target.dependencies);
+
+        if (t.contains("all")) {
+            target.custom_target.has_all = true;
+            target.custom_target.all = t.find("all").as_boolean();
+        }
+
+        if (t.contains("command")) {
+            target.custom_target.has_command = true;
+            auto commands = parse_command_arguments(t.find("command"), "command");
+            for (auto &command : commands) {
+                target.custom_target.commands.push_back(std::move(command));
             }
-        };
-        fix_relative_paths(target.link_libraries, "link-libraries");
-        fix_relative_paths(target.private_link_libraries, "private-link-libraries");
+        }
 
-        t.optional("link-options", target.link_options);
-        t.optional("private-link-options", target.private_link_options);
+        if (t.contains("commands")) {
+            target.custom_target.has_commands = true;
+            auto commands = parse_command_arguments(t.find("commands"), "commands");
+            for (auto &command : commands) {
+                target.custom_target.commands.push_back(std::move(command));
+            }
+        }
 
-        t.optional("precompile-headers", target.precompile_headers);
-        t.optional("private-precompile-headers", target.private_precompile_headers);
+        t.optional("depends", target.custom_target.depends);
+        t.optional("byproducts", target.custom_target.byproducts);
+
+        if (t.contains("working-directory")) {
+            target.custom_target.has_working_directory = true;
+            target.custom_target.working_directory = t.find("working-directory").as_string();
+        }
+
+        if (t.contains("comment")) {
+            target.custom_target.has_comment = true;
+            target.custom_target.comment = t.find("comment").as_string();
+        }
+
+        if (t.contains("job-pool")) {
+            target.custom_target.has_job_pool = true;
+            target.custom_target.job_pool = t.find("job-pool").as_string();
+        }
+
+        if (t.contains("job-server-aware")) {
+            target.custom_target.has_job_server_aware = true;
+            target.custom_target.job_server_aware = t.find("job-server-aware").as_boolean();
+        }
+
+        if (t.contains("verbatim")) {
+            target.custom_target.has_verbatim = true;
+            target.custom_target.verbatim = t.find("verbatim").as_boolean();
+        }
+
+        if (t.contains("uses-terminal")) {
+            target.custom_target.has_uses_terminal = true;
+            target.custom_target.uses_terminal = t.find("uses-terminal").as_boolean();
+        }
+
+        if (t.contains("command-expand-lists")) {
+            target.custom_target.has_command_expand_lists = true;
+            target.custom_target.command_expand_lists = t.find("command-expand-lists").as_boolean();
+        }
+
+        if (t.contains("custom-command")) {
+            const auto &custom_commands = t.find("custom-command");
+            if (!custom_commands.is_array()) {
+                throw_key_error("Expected an array of tables", "custom-command", custom_commands);
+            }
+            for (const auto &custom_command_value : custom_commands.as_array()) {
+                if (!custom_command_value.is_table()) {
+                    throw_key_error("Expected an array of tables", "custom-command", custom_command_value);
+                }
+
+                auto &custom = checker.create(custom_command_value);
+                Target::CustomCommand custom_command;
+
+                custom.optional("condition", custom_command.condition);
+
+                if (custom.contains("command")) {
+                    auto commands = parse_command_arguments(custom.find("command"), "command");
+                    for (auto &command : commands) {
+                        custom_command.commands.push_back(std::move(command));
+                    }
+                }
+
+                if (custom.contains("commands")) {
+                    auto commands = parse_command_arguments(custom.find("commands"), "commands");
+                    for (auto &command : commands) {
+                        custom_command.commands.push_back(std::move(command));
+                    }
+                }
+
+                custom.optional("outputs", custom_command.outputs);
+
+                if (custom.contains("build-event")) {
+                    custom_command.build_event = normalize_build_event(custom.find("build-event").as_string());
+                }
+
+                if (custom.contains("append")) {
+                    custom_command.has_append = true;
+                    custom_command.append = custom.find("append").as_boolean();
+                }
+
+                if (custom.contains("main-dependency")) {
+                    custom_command.has_main_dependency = true;
+                    custom_command.main_dependency = custom.find("main-dependency").as_string();
+                }
+
+                custom.optional("depends", custom_command.depends);
+                custom.optional("byproducts", custom_command.byproducts);
+
+                if (custom.contains("implicit-depends")) {
+                    custom_command.implicit_depends = parse_implicit_dependencies(custom.find("implicit-depends"), "implicit-depends");
+                }
+
+                if (custom.contains("working-directory")) {
+                    custom_command.has_working_directory = true;
+                    custom_command.working_directory = custom.find("working-directory").as_string();
+                }
+
+                if (custom.contains("comment")) {
+                    custom_command.has_comment = true;
+                    custom_command.comment = custom.find("comment").as_string();
+                }
+
+                if (custom.contains("depfile")) {
+                    custom_command.has_depfile = true;
+                    custom_command.depfile = custom.find("depfile").as_string();
+                }
+
+                if (custom.contains("job-pool")) {
+                    custom_command.has_job_pool = true;
+                    custom_command.job_pool = custom.find("job-pool").as_string();
+                }
+
+                if (custom.contains("job-server-aware")) {
+                    custom_command.has_job_server_aware = true;
+                    custom_command.job_server_aware = custom.find("job-server-aware").as_boolean();
+                }
+
+                if (custom.contains("verbatim")) {
+                    custom_command.has_verbatim = true;
+                    custom_command.verbatim = custom.find("verbatim").as_boolean();
+                }
+
+                if (custom.contains("uses-terminal")) {
+                    custom_command.has_uses_terminal = true;
+                    custom_command.uses_terminal = custom.find("uses-terminal").as_boolean();
+                }
+
+                if (custom.contains("codegen")) {
+                    custom_command.has_codegen = true;
+                    custom_command.codegen = custom.find("codegen").as_boolean();
+                }
+
+                if (custom.contains("command-expand-lists")) {
+                    custom_command.has_command_expand_lists = true;
+                    custom_command.command_expand_lists = custom.find("command-expand-lists").as_boolean();
+                }
+
+                if (custom.contains("depends-explicit-only")) {
+                    custom_command.has_depends_explicit_only = true;
+                    custom_command.depends_explicit_only = custom.find("depends-explicit-only").as_boolean();
+                }
+
+                if (custom_command.is_output_form() == custom_command.is_target_form()) {
+                    throw_key_error("Specify exactly one of outputs or build-event", "custom-command", custom_command_value);
+                }
+
+                if (custom_command.is_target_form()) {
+                    if (custom_command.build_event != "PRE_BUILD" && custom_command.build_event != "PRE_LINK" &&
+                        custom_command.build_event != "POST_BUILD") {
+                        throw_key_error("build-event must be one of: pre-build, pre-link, post-build", "build-event", custom.find("build-event"));
+                    }
+                    if (resolved_target_type == target_interface) {
+                        throw_key_error("build-event cannot be used with type = \"interface\"", "build-event", custom.find("build-event"));
+                    }
+                    if (resolved_target_type == target_object) {
+                        throw_key_error("build-event cannot be used with type = \"object\"", "build-event", custom.find("build-event"));
+                    }
+                    if (resolved_target_type == target_custom && custom_command.build_event == "PRE_LINK") {
+                        throw_key_error("build-event = \"pre-link\" cannot be used with type = \"custom\"", "build-event",
+                                        custom.find("build-event"));
+                    }
+                    if (custom_command.has_append || custom_command.has_main_dependency || !custom_command.depends.empty() ||
+                        !custom_command.implicit_depends.empty() || custom_command.has_depfile || custom_command.has_job_pool ||
+                        custom_command.has_job_server_aware || custom_command.has_codegen || custom_command.has_depends_explicit_only) {
+                        throw_key_error("Unsupported option for TARGET custom commands", "custom-command", custom_command_value);
+                    }
+                } else {
+                    if (custom_command.has_depfile && !custom_command.implicit_depends.empty()) {
+                        throw_key_error("depfile cannot be used with implicit-depends", "depfile", custom.find("depfile"));
+                    }
+                    if (custom_command.has_job_pool && custom_command.has_uses_terminal && custom_command.uses_terminal) {
+                        throw_key_error("job-pool cannot be used with uses-terminal", "job-pool", custom.find("job-pool"));
+                    }
+                    if (custom_command.append &&
+                        (custom_command.has_depfile || custom_command.has_job_pool || custom_command.has_job_server_aware ||
+                         custom_command.has_codegen || custom_command.has_command_expand_lists || custom_command.has_uses_terminal ||
+                         custom_command.has_verbatim || custom_command.has_depends_explicit_only || !custom_command.byproducts.empty())) {
+                        throw_key_error("append cannot be used with depfile, job-pool, job-server-aware, codegen, command-expand-lists, "
+                                        "uses-terminal, verbatim, depends-explicit-only, or byproducts",
+                                        "append", custom.find("append"));
+                    }
+                }
+
+                if (custom_command.is_output_form() && custom_command.append && custom_command.commands.empty() && custom_command.depends.empty()) {
+                    throw_key_error("append requires at least one command or depends", "append", custom.find("append"));
+                }
+
+                if (custom_command.commands.empty() &&
+                    !(custom_command.is_output_form() && custom_command.append && !custom_command.depends.empty())) {
+                    throw_key_error("At least one command is required", "custom-command", custom_command_value);
+                }
+
+                target.custom_commands.push_back(std::move(custom_command));
+            }
+        }
+
+        if (resolved_target_type == target_custom && target.custom_target.has_job_pool && target.custom_target.has_uses_terminal &&
+            target.custom_target.uses_terminal) {
+            throw_key_error("job-pool cannot be used with uses-terminal", "job-pool", t.find("job-pool"));
+        }
+
+        if (resolved_target_type != target_custom && !target.custom_target.empty()) {
+            const char *custom_key = "all";
+            if (target.custom_target.has_command) {
+                custom_key = "command";
+            } else if (target.custom_target.has_commands) {
+                custom_key = "commands";
+            } else if (!target.custom_target.depends.empty()) {
+                custom_key = "depends";
+            } else if (!target.custom_target.byproducts.empty()) {
+                custom_key = "byproducts";
+            } else if (target.custom_target.has_working_directory) {
+                custom_key = "working-directory";
+            } else if (target.custom_target.has_comment) {
+                custom_key = "comment";
+            } else if (target.custom_target.has_job_pool) {
+                custom_key = "job-pool";
+            } else if (target.custom_target.has_job_server_aware) {
+                custom_key = "job-server-aware";
+            } else if (target.custom_target.has_verbatim) {
+                custom_key = "verbatim";
+            } else if (target.custom_target.has_uses_terminal) {
+                custom_key = "uses-terminal";
+            } else if (target.custom_target.has_command_expand_lists) {
+                custom_key = "command-expand-lists";
+            }
+            throw_key_error("Custom target options can only be used with type = \"custom\"", custom_key, t.find(custom_key));
+        }
 
         Condition<std::string> msvc_runtime;
         t.optional("msvc-runtime", msvc_runtime);
@@ -787,6 +1182,7 @@ Project::Project(const Project *parent, const std::string &path, bool build) : p
             tmplate.outline = parse_target(name, t, true);
 
             t.optional("add-function", tmplate.add_function);
+            t.optional("add-arguments", tmplate.add_arguments);
             t.optional("pass-sources-to-add-function", tmplate.pass_sources_to_add_function);
             t.optional("pass-sources", tmplate.pass_sources_to_add_function);
 

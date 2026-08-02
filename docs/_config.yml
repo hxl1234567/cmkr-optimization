@@ -11,12 +11,12 @@ color_scheme: light-or-dark
 heading_anchors: true
 aux_links:
   "GitHub":
-    - "https://gitee.com/hxl3/cmkr"
+    - "https://gitee.com/cmkr_lib/cmkr"
 aux_links_new_tab: true
 
 gh_edit_link: true
 gh_edit_link_text: "Edit this page on GitHub."
-gh_edit_repository: "https://gitee.com/hxl3/cmkr"
+gh_edit_repository: "https://gitee.com/cmkr_lib/cmkr"
 gh_edit_branch: "main"
 gh_edit_view_mode: "edit"
 gh_edit_source: docs

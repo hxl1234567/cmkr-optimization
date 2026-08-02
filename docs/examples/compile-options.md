@@ -31,4 +31,4 @@ The `hello` target uses [conditions](/cmake-toml#conditions) to set different co
 
 _Note_: In general you only want to specify flags _required_ to compile your code without errors.
 
-<sup><sub>This page was automatically generated from [tests/compile-options/cmake.toml](https://gitee.com/hxl3/cmkr/tree/main/tests/compile-options/cmake.toml).</sub></sup>
+<sup><sub>This page was automatically generated from [tests/compile-options/cmake.toml](https://gitee.com/cmkr_lib/cmkr/tree/main/tests/compile-options/cmake.toml).</sub></sup>

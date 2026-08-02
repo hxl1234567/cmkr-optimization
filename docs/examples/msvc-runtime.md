@@ -31,4 +31,4 @@ msvc-runtime = "dynamic"
 
 
 
-<sup><sub>This page was automatically generated from [tests/msvc-runtime/cmake.toml](https://gitee.com/hxl3/cmkr/tree/main/tests/msvc-runtime/cmake.toml).</sub></sup>
+<sup><sub>This page was automatically generated from [tests/msvc-runtime/cmake.toml](https://gitee.com/cmkr_lib/cmkr/tree/main/tests/msvc-runtime/cmake.toml).</sub></sup>

@@ -24,4 +24,4 @@ compile-features = ["cxx_std_11"]
 
 This is equivalent to CMake's [target_compile_features](https://cmake.org/cmake/help/latest/command/target_compile_features.html)`(example PRIVATE cxx_std_11)`. For more information on available C/C++ standards and features see [cmake-compile-features(7)](https://cmake.org/cmake/help/latest/manual/cmake-compile-features.7.html).
 
-<sup><sub>This page was automatically generated from [tests/cxx-standard/cmake.toml](https://gitee.com/hxl3/cmkr/tree/main/tests/cxx-standard/cmake.toml).</sub></sup>
+<sup><sub>This page was automatically generated from [tests/cxx-standard/cmake.toml](https://gitee.com/cmkr_lib/cmkr/tree/main/tests/cxx-standard/cmake.toml).</sub></sup>

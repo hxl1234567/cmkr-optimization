@@ -4,6 +4,7 @@
 
 #include "fs.hpp"
 #include "project_parser.hpp"
+#include <algorithm>
 #include <cstdio>
 #include <memory>
 #include <sstream>
@@ -54,6 +55,18 @@ static std::string format(const char *format, const tsl::ordered_map<std::string
     return s;
 }
 
+static std::string quoted(const std::string &str) {
+    return "\"" + str + "\"";
+}
+
+static std::string space_error_check(const std::string &str) {
+    auto pos = str.find_last_of(' ');
+    if (pos != std::string::npos)
+        return quoted(str) + " <------ !space(s)";
+    else
+        return quoted(str);
+}
+
 static std::vector<fs::path> expand_cmake_path(const fs::path &source_path, const fs::path &toml_dir, bool is_root_project) {
     auto is_subdir = [](fs::path p, const fs::path &root) {
         while (true) {
@@ -94,14 +107,21 @@ static std::vector<fs::path> expand_cmake_path(const fs::path &source_path, cons
 
     std::vector<fs::path> paths;
     if (stem == "*") {
-        for (const auto &f : fs::directory_iterator(toml_dir / source_path.parent_path(), fs::directory_options::follow_directory_symlink)) {
+        const auto directory = toml_dir / source_path.parent_path();
+        if (!fs::is_directory(directory)) {
+            throw std::runtime_error("Source directory not found: " + source_path.parent_path().string());
+        }
+        for (const auto &f : fs::directory_iterator(directory, fs::directory_options::follow_directory_symlink)) {
             if (!f.is_directory() && has_extension(f.path(), extension)) {
                 paths.push_back(fs::relative(f, toml_dir));
             }
         }
     } else if (stem == "**") {
-        for (const auto &f :
-             fs::recursive_directory_iterator(toml_dir / source_path.parent_path(), fs::directory_options::follow_directory_symlink)) {
+        const auto directory = toml_dir / source_path.parent_path();
+        if (!fs::is_directory(directory)) {
+            throw std::runtime_error("Source directory not found: " + source_path.parent_path().string());
+        }
+        for (const auto &f : fs::recursive_directory_iterator(directory, fs::directory_options::follow_directory_symlink)) {
             if (!f.is_directory() && has_extension(f.path(), extension)) {
                 paths.push_back(fs::relative(f, toml_dir));
             }
@@ -243,7 +263,13 @@ void generate_project(const std::string &type) {
     generate_gitfile(".gitattributes", {"/**/CMakeLists.txt linguist-generated", "/**/cmkr.cmake linguist-vendored"});
 
     // Generate .gitignore with reasonable defaults for CMake
-    generate_gitfile(".gitignore", {"build*/", "cmake-build*/", "CMakerLists.txt", "CMakeLists.txt.user"});
+    generate_gitfile(".gitignore", {
+                                       "build*/",
+                                       "cmake-build*/",
+                                       "CMakerLists.txt",
+                                       "CMakeLists.txt.user",
+                                       "CMakeUserPresets.json",
+                                   });
 
     tsl::ordered_map<std::string, std::string> variables = {
         {"@name", name},
@@ -713,15 +739,40 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
 
     parser::Project project(parent_project, path, false);
 
-    for (const auto &lang : project.project_languages) {
-        if (known_languages.find(lang) == known_languages.end()) {
-            if (project.project_allow_unknown_languages) {
-                printf("[warning] Unknown language '%s' specified\n", lang.c_str());
-            } else {
-                throw std::runtime_error("Unknown language '" + lang + "' specified");
-            }
+    tsl::ordered_set<std::string> flat_project_languages;
+    for (const auto &itr : project.project_languages) {
+        for (const auto &language : itr.second) {
+            flat_project_languages.insert(language);
         }
     }
+
+    // Reference: https://gitlab.kitware.com/cmake/cmake/-/issues/24340#note_1304703
+    flat_project_languages.insert("RC");
+
+    // All acceptable extensions based off our given languages.
+    tsl::ordered_set<std::string> project_extensions;
+    for (const auto &language : flat_project_languages) {
+        auto itr = known_languages.find(language);
+        if (itr == known_languages.end()) {
+            if (project.project_allow_unknown_languages) {
+                printf("[warning] Unknown language '%s' specified\n", language.c_str());
+            } else {
+                throw std::runtime_error("Unknown language '" + language + "' specified");
+            }
+        } else {
+            project_extensions.insert(itr->second.begin(), itr->second.end());
+        }
+    }
+
+    auto contains_language_source = [&project_extensions](const std::vector<std::string> &sources) {
+        for (const auto &source : sources) {
+            auto extension = fs::path(source).extension().string();
+            if (project_extensions.count(extension) > 0) {
+                return true;
+            }
+        }
+        return false;
+    };
 
     Generator gen(project, path);
 
@@ -737,7 +788,7 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
         gen.endl();
     };
 
-    std::string cmkr_url = "https://gitee.com/hxl3/cmkr";
+    std::string cmkr_url = "https://gitee.com/cmkr_lib/cmkr";
     comment("This file is automatically generated from cmake.toml - DO NOT EDIT");
     comment("See " + cmkr_url + " for more information");
     endl();
@@ -900,17 +951,29 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
     gen.conditional_cmake(project.cmake_before);
 
     if (!project.project_name.empty()) {
-        auto languages = std::make_pair("LANGUAGES", project.project_languages);
+        auto languages = std::make_pair("LANGUAGES", project.project_languages[""]);
         auto version = std::make_pair("VERSION", project.project_version);
         auto description = std::make_pair("DESCRIPTION", project.project_description);
-        cmd("project")(project.project_name, languages, version, description).endl();
+        cmd("project")(project.project_name, languages, version, description);
 
-        for (const auto &language : project.project_languages) {
+        for (const auto &language : project.project_languages[""]) {
             if (language == "CSharp") {
                 cmd("include")("CSharpUtilities").endl();
                 break;
             }
         }
+
+        gen.handle_condition(project.project_languages, [&cmd](const std::string &condition, const std::vector<std::string> &languages) {
+            if (!condition.empty()) {
+                cmd("enable_language")(languages).endl();
+                for (const auto &language : languages) {
+                    if (language == "CSharp") {
+                        cmd("include")("CSharpUtilities").endl();
+                        break;
+                    }
+                }
+            }
+        });
     }
 
     gen.conditional_includes(project.include_after);
@@ -973,7 +1036,7 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
         }
         ofs << R"({
   "$cmkr": "This file is automatically generated from cmake.toml - DO NOT EDIT",
-  "$cmkr-url": "https://gitee.com/hxl3/cmkr",
+  "$cmkr-url": "https://gitee.com/cmkr_lib/cmkr",
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
   "dependencies": [
 )";
@@ -1068,6 +1131,22 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
             gen.conditional_includes(content.include_before);
             gen.conditional_cmake(content.cmake_before);
 
+            // Set cache variables before FetchContent
+            if (!content.options.empty()) {
+                for (const auto &opt : content.options) {
+                    std::string value;
+                    std::string type;
+                    if (opt.second.value.index() == 0) {
+                        value = mpark::get<0>(opt.second.value) ? "ON" : "OFF";
+                        type = "BOOL";
+                    } else {
+                        value = mpark::get<1>(opt.second.value);
+                        type = "STRING";
+                    }
+                    cmd("set")(opt.first, value, "CACHE", type, RawArg("\"\""), "FORCE");
+                }
+            }
+
             std::string version_info;
             if (content.arguments.contains("GIT_TAG")) {
                 version_info = " (" + content.arguments.at("GIT_TAG") + ")";
@@ -1126,34 +1205,6 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
         gen.conditional_cmake(subdir.cmake_after);
     }
 
-    // The implicit default is ["C", "CXX"], so make sure this list isn't
-    // empty or projects without languages explicitly defined will error.
-    auto project_languages = project.project_languages;
-    if (project_languages.empty())
-        project_languages = {"C", "CXX"};
-
-    // Reference: https://gitlab.kitware.com/cmake/cmake/-/issues/24340#note_1304703
-    project_languages.push_back("RC");
-
-    // All acceptable extensions based off our given languages.
-    tsl::ordered_set<std::string> project_extensions;
-    for (const auto &language : project_languages) {
-        auto itr = known_languages.find(language);
-        if (itr != known_languages.end()) {
-            project_extensions.insert(itr->second.begin(), itr->second.end());
-        }
-    }
-
-    auto contains_language_source = [&project_extensions](const std::vector<std::string> &sources) {
-        for (const auto &source : sources) {
-            auto extension = fs::path(source).extension().string();
-            if (project_extensions.count(extension) > 0) {
-                return true;
-            }
-        }
-        return false;
-    };
-
     if (!project.targets.empty()) {
         auto project_root = project.root();
         for (size_t i = 0; i < project.targets.size(); i++) {
@@ -1176,6 +1227,14 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
                         tmplate_cs = std::unique_ptr<ConditionScope>(new ConditionScope(gen, tmplate->outline.condition));
                     }
                 }
+            }
+
+            auto resolved_target_type = target.type;
+            if (tmplate != nullptr) {
+                if (resolved_target_type != parser::target_template) {
+                    throw_target_error("Unreachable code, unexpected target type for template");
+                }
+                resolved_target_type = tmplate->outline.type;
             }
 
             ConditionScope cs(gen, target.condition);
@@ -1217,6 +1276,103 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
             gen.conditional_includes(target.include_before);
             gen.conditional_cmake(target.cmake_before);
 
+            auto merge_unique_vector = [](std::vector<std::string> &destination, const std::vector<std::string> &source) {
+                for (const auto &item : source) {
+                    if (std::find(destination.begin(), destination.end(), item) == destination.end()) {
+                        destination.push_back(item);
+                    }
+                }
+            };
+
+            auto custom_target = target.custom_target;
+            if (tmplate != nullptr) {
+                const auto &custom = tmplate->outline.custom_target;
+                if (!custom_target.has_all && custom.has_all) {
+                    custom_target.has_all = true;
+                    custom_target.all = custom.all;
+                }
+                if (custom.has_command) {
+                    custom_target.has_command = true;
+                }
+                if (custom.has_commands) {
+                    custom_target.has_commands = true;
+                }
+                if (!custom.commands.empty()) {
+                    custom_target.commands.insert(custom_target.commands.begin(), custom.commands.begin(), custom.commands.end());
+                }
+                merge_unique_vector(custom_target.depends, custom.depends);
+                merge_unique_vector(custom_target.byproducts, custom.byproducts);
+                if (!custom_target.has_working_directory && custom.has_working_directory) {
+                    custom_target.has_working_directory = true;
+                    custom_target.working_directory = custom.working_directory;
+                }
+                if (!custom_target.has_comment && custom.has_comment) {
+                    custom_target.has_comment = true;
+                    custom_target.comment = custom.comment;
+                }
+                if (!custom_target.has_job_pool && custom.has_job_pool) {
+                    custom_target.has_job_pool = true;
+                    custom_target.job_pool = custom.job_pool;
+                }
+                if (!custom_target.has_job_server_aware && custom.has_job_server_aware) {
+                    custom_target.has_job_server_aware = true;
+                    custom_target.job_server_aware = custom.job_server_aware;
+                }
+                if (!custom_target.has_verbatim && custom.has_verbatim) {
+                    custom_target.has_verbatim = true;
+                    custom_target.verbatim = custom.verbatim;
+                }
+                if (!custom_target.has_uses_terminal && custom.has_uses_terminal) {
+                    custom_target.has_uses_terminal = true;
+                    custom_target.uses_terminal = custom.uses_terminal;
+                }
+                if (!custom_target.has_command_expand_lists && custom.has_command_expand_lists) {
+                    custom_target.has_command_expand_lists = true;
+                    custom_target.command_expand_lists = custom.command_expand_lists;
+                }
+            }
+
+            std::vector<parser::Target::CustomCommand> custom_commands;
+            if (tmplate != nullptr) {
+                custom_commands.insert(custom_commands.end(), tmplate->outline.custom_commands.begin(), tmplate->outline.custom_commands.end());
+            }
+            custom_commands.insert(custom_commands.end(), target.custom_commands.begin(), target.custom_commands.end());
+
+            if (resolved_target_type == parser::target_custom && custom_target.has_job_pool && custom_target.has_uses_terminal &&
+                custom_target.uses_terminal) {
+                throw_target_error("job-pool cannot be used with uses-terminal");
+            }
+
+            auto has_cmake_path_reference = [](const std::string &value) {
+                return value.find("${") != std::string::npos || value.find("$ENV{") != std::string::npos ||
+                       value.find("$CACHE{") != std::string::npos;
+            };
+
+            auto normalize_generated_output_source = [&has_cmake_path_reference](const std::string &output) {
+                auto starts_with = [](const std::string &value, const std::string &prefix) {
+                    return value.rfind(prefix, 0) == 0;
+                };
+                if (fs::path(output).is_absolute()) {
+                    return output;
+                }
+                if (starts_with(output, "${CMAKE_CURRENT_BINARY_DIR}") || starts_with(output, "${CMAKE_BINARY_DIR}") ||
+                    starts_with(output, "${PROJECT_BINARY_DIR}") || starts_with(output, "${CMAKE_CURRENT_SOURCE_DIR}") ||
+                    starts_with(output, "${CMAKE_SOURCE_DIR}") || starts_with(output, "${PROJECT_SOURCE_DIR}") ||
+                    starts_with(output, "${CMAKE_CURRENT_LIST_DIR}") || starts_with(output, "$ENV{") || starts_with(output, "$CACHE{") ||
+                    has_cmake_path_reference(output)) {
+                    return output;
+                }
+                return "${CMAKE_CURRENT_BINARY_DIR}/" + output;
+            };
+
+            parser::Condition<tsl::ordered_set<std::string>> mcustom_target_depends;
+            if (resolved_target_type == parser::target_custom) {
+                auto &unconditional_depends = mcustom_target_depends[""];
+                for (const auto &dep : custom_target.depends) {
+                    unconditional_depends.insert(dep);
+                }
+            }
+
             // Merge the sources from the template and the target. The sources
             // without condition need to be processed first
             parser::Condition<tsl::ordered_set<std::string>> msources;
@@ -1235,8 +1391,27 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
             }
             merge_sources(target.sources);
 
+            // Generated outputs commonly live under the binary directory, which is not necessarily
+            // nested inside the source directory (e.g. out-of-tree builds). Track them separately so
+            // they can be excluded from the source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} ...) call below.
+            std::vector<std::string> generated_output_sources;
+            for (const auto &custom_command : custom_commands) {
+                if (!custom_command.is_output_form()) {
+                    continue;
+                }
+                auto &condition_sources = msources[custom_command.condition];
+                for (const auto &output : custom_command.outputs) {
+                    auto normalized_output = normalize_generated_output_source(output);
+                    condition_sources.insert(normalized_output);
+                    generated_output_sources.push_back(std::move(normalized_output));
+                    if (resolved_target_type == parser::target_custom) {
+                        mcustom_target_depends[custom_command.condition].insert(output);
+                    }
+                }
+            }
+
             // Improve IDE support
-            if (target.type != parser::target_interface) {
+            if (resolved_target_type != parser::target_interface) {
                 msources[""].insert("cmake.toml");
             }
 
@@ -1270,7 +1445,7 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
                 }
 
                 // Make sure there are source files for the languages used by the project
-                switch (target.type) {
+                switch (resolved_target_type) {
                 case parser::target_executable:
                 case parser::target_library:
                 case parser::target_shared:
@@ -1289,12 +1464,11 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
 
                     // Make sure relative source files exist
                     for (const auto &source : sources) {
-                        auto var_index = source.find("${");
-                        if (var_index != std::string::npos)
+                        if (has_cmake_path_reference(source))
                             continue;
                         const auto &source_path = fs::path(path) / source;
                         if (!fs::exists(source_path)) {
-                            throw_target_error("Source file not found: " + source);
+                            throw_target_error("Source file not found: " + space_error_check(source));
                         }
                     }
                     break;
@@ -1314,18 +1488,12 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
                 }
             });
 
-            auto target_type = target.type;
-
-            if (tmplate != nullptr) {
-                if (target_type != parser::target_template) {
-                    throw_target_error("Unreachable code, unexpected target type for template");
-                }
-                target_type = tmplate->outline.type;
-            }
+            auto target_type = resolved_target_type;
 
             std::string add_command;
             std::string target_type_string;
             std::string target_scope;
+            bool is_custom_target = false;
 
             switch (target_type) {
             case parser::target_executable:
@@ -1354,9 +1522,7 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
                 target_scope = "INTERFACE";
                 break;
             case parser::target_custom:
-                // TODO: add proper support, this is hacky
-                add_command = "add_custom_target";
-                target_type_string = "SOURCES";
+                is_custom_target = true;
                 target_scope = "PUBLIC";
                 break;
             case parser::target_object:
@@ -1369,20 +1535,215 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
                 throw_target_error("Unimplemented enum value");
             }
 
+            auto has_custom_target_depends = false;
+            auto custom_target_depends_var = target.name + "_DEPENDS";
+            auto custom_target_depends_with_set = true;
+            if (is_custom_target) {
+                for (const auto &itr : mcustom_target_depends) {
+                    if (!itr.second.empty()) {
+                        has_custom_target_depends = true;
+                        break;
+                    }
+                }
+                if (has_custom_target_depends && mcustom_target_depends[""].empty()) {
+                    custom_target_depends_with_set = false;
+                    cmd("set")(custom_target_depends_var, RawArg("\"\"")).endl();
+                }
+                gen.handle_condition(mcustom_target_depends, [&](const std::string &condition, const tsl::ordered_set<std::string> &depend_set) {
+                    std::vector<std::string> depends;
+                    depends.reserve(depend_set.size());
+                    for (const auto &depend : depend_set) {
+                        depends.push_back(depend);
+                    }
+
+                    if (custom_target_depends_with_set) {
+                        if (!condition.empty()) {
+                            throw_target_error("Unreachable code, make sure unconditional depends are first");
+                        }
+                        cmd("set")(custom_target_depends_var, depends);
+                        custom_target_depends_with_set = false;
+                    } else {
+                        cmd("list")("APPEND", custom_target_depends_var, depends);
+                    }
+                });
+            }
+
+            auto append_keyword = [](std::vector<RawArg> &args, const std::string &keyword) {
+                args.emplace_back(keyword);
+            };
+            auto append_value = [](std::vector<RawArg> &args, const std::string &value) {
+                args.emplace_back(Command::quote(value));
+            };
+            auto append_values = [&](std::vector<RawArg> &args, const std::vector<std::string> &values) {
+                for (const auto &value : values) {
+                    append_value(args, value);
+                }
+            };
+            auto append_commands = [&](std::vector<RawArg> &args, const std::vector<std::vector<std::string>> &commands) {
+                for (const auto &command_args : commands) {
+                    append_keyword(args, "COMMAND");
+                    append_values(args, command_args);
+                }
+            };
+
+            auto emit_custom_command = [&](const parser::Target::CustomCommand &custom_command) {
+                std::vector<RawArg> args;
+                if (custom_command.is_output_form()) {
+                    append_keyword(args, "OUTPUT");
+                    append_values(args, custom_command.outputs);
+                    append_commands(args, custom_command.commands);
+                    if (custom_command.has_main_dependency) {
+                        append_keyword(args, "MAIN_DEPENDENCY");
+                        append_value(args, custom_command.main_dependency);
+                    }
+                    if (!custom_command.depends.empty()) {
+                        append_keyword(args, "DEPENDS");
+                        append_values(args, custom_command.depends);
+                    }
+                    if (!custom_command.byproducts.empty()) {
+                        append_keyword(args, "BYPRODUCTS");
+                        append_values(args, custom_command.byproducts);
+                    }
+                    if (!custom_command.implicit_depends.empty()) {
+                        append_keyword(args, "IMPLICIT_DEPENDS");
+                        for (const auto &implicit_dependency : custom_command.implicit_depends) {
+                            append_value(args, implicit_dependency.language);
+                            append_value(args, implicit_dependency.file);
+                        }
+                    }
+                    if (custom_command.has_working_directory) {
+                        append_keyword(args, "WORKING_DIRECTORY");
+                        append_value(args, custom_command.working_directory);
+                    }
+                    if (custom_command.has_comment) {
+                        append_keyword(args, "COMMENT");
+                        append_value(args, custom_command.comment);
+                    }
+                    if (custom_command.has_depfile) {
+                        append_keyword(args, "DEPFILE");
+                        append_value(args, custom_command.depfile);
+                    }
+                    if (custom_command.has_job_pool) {
+                        append_keyword(args, "JOB_POOL");
+                        append_value(args, custom_command.job_pool);
+                    }
+                    if (custom_command.has_job_server_aware) {
+                        append_keyword(args, "JOB_SERVER_AWARE");
+                        append_value(args, custom_command.job_server_aware ? "ON" : "OFF");
+                    }
+                    if (custom_command.has_verbatim && custom_command.verbatim) {
+                        append_keyword(args, "VERBATIM");
+                    }
+                    if (custom_command.has_append && custom_command.append) {
+                        append_keyword(args, "APPEND");
+                    }
+                    if (custom_command.has_uses_terminal && custom_command.uses_terminal) {
+                        append_keyword(args, "USES_TERMINAL");
+                    }
+                    if (custom_command.has_codegen && custom_command.codegen) {
+                        append_keyword(args, "CODEGEN");
+                    }
+                    if (custom_command.has_command_expand_lists && custom_command.command_expand_lists) {
+                        append_keyword(args, "COMMAND_EXPAND_LISTS");
+                    }
+                    if (custom_command.has_depends_explicit_only && custom_command.depends_explicit_only) {
+                        append_keyword(args, "DEPENDS_EXPLICIT_ONLY");
+                    }
+                } else {
+                    append_keyword(args, "TARGET");
+                    append_value(args, target.name);
+                    append_keyword(args, custom_command.build_event);
+                    append_commands(args, custom_command.commands);
+                    if (!custom_command.byproducts.empty()) {
+                        append_keyword(args, "BYPRODUCTS");
+                        append_values(args, custom_command.byproducts);
+                    }
+                    if (custom_command.has_working_directory) {
+                        append_keyword(args, "WORKING_DIRECTORY");
+                        append_value(args, custom_command.working_directory);
+                    }
+                    if (custom_command.has_comment) {
+                        append_keyword(args, "COMMENT");
+                        append_value(args, custom_command.comment);
+                    }
+                    if (custom_command.has_verbatim && custom_command.verbatim) {
+                        append_keyword(args, "VERBATIM");
+                    }
+                    if (custom_command.has_command_expand_lists && custom_command.command_expand_lists) {
+                        append_keyword(args, "COMMAND_EXPAND_LISTS");
+                    }
+                    if (custom_command.has_uses_terminal && custom_command.uses_terminal) {
+                        append_keyword(args, "USES_TERMINAL");
+                    }
+                }
+                cmd("add_custom_command")(args).endl();
+            };
+
+            for (const auto &custom_command : custom_commands) {
+                if (custom_command.is_output_form()) {
+                    ConditionScope custom_scope(gen, custom_command.condition);
+                    emit_custom_command(custom_command);
+                }
+            }
+
             // Handle custom add commands from templates.
             if (tmplate != nullptr && !tmplate->add_function.empty()) {
                 add_command = tmplate->add_function;
-                target_type_string = ""; // TODO: let templates supply options to the add_command here?
 
                 if (tmplate->pass_sources_to_add_function) {
-                    cmd(add_command)(target.name, target_type_string, "${" + sources_var + "}");
+                    cmd(add_command)(target.name, tmplate->add_arguments, "${" + sources_var + "}");
                 } else {
-                    cmd(add_command)(target.name, target_type_string).endl();
+                    cmd(add_command)(target.name, tmplate->add_arguments).endl();
                     if (has_sources) {
                         cmd("target_sources")(target.name, target_type == parser::target_interface ? "INTERFACE" : "PRIVATE",
                                               "${" + sources_var + "}");
                     }
                 }
+            } else if (is_custom_target) {
+                std::vector<RawArg> args;
+                append_value(args, target.name);
+                if (custom_target.has_all && custom_target.all) {
+                    append_keyword(args, "ALL");
+                }
+                append_commands(args, custom_target.commands);
+                if (has_custom_target_depends) {
+                    append_keyword(args, "DEPENDS");
+                    append_value(args, "${" + custom_target_depends_var + "}");
+                }
+                if (!custom_target.byproducts.empty()) {
+                    append_keyword(args, "BYPRODUCTS");
+                    append_values(args, custom_target.byproducts);
+                }
+                if (custom_target.has_working_directory) {
+                    append_keyword(args, "WORKING_DIRECTORY");
+                    append_value(args, custom_target.working_directory);
+                }
+                if (custom_target.has_comment) {
+                    append_keyword(args, "COMMENT");
+                    append_value(args, custom_target.comment);
+                }
+                if (custom_target.has_job_pool) {
+                    append_keyword(args, "JOB_POOL");
+                    append_value(args, custom_target.job_pool);
+                }
+                if (custom_target.has_job_server_aware) {
+                    append_keyword(args, "JOB_SERVER_AWARE");
+                    append_value(args, custom_target.job_server_aware ? "ON" : "OFF");
+                }
+                if (custom_target.has_verbatim && custom_target.verbatim) {
+                    append_keyword(args, "VERBATIM");
+                }
+                if (custom_target.has_uses_terminal && custom_target.uses_terminal) {
+                    append_keyword(args, "USES_TERMINAL");
+                }
+                if (custom_target.has_command_expand_lists && custom_target.command_expand_lists) {
+                    append_keyword(args, "COMMAND_EXPAND_LISTS");
+                }
+                if (has_sources) {
+                    append_keyword(args, "SOURCES");
+                    append_value(args, "${" + sources_var + "}");
+                }
+                cmd("add_custom_target")(args).endl();
             } else {
                 cmd(add_command)(target.name, target_type_string).endl();
                 if (has_sources) {
@@ -1390,9 +1751,25 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
                 }
             }
 
+            for (const auto &custom_command : custom_commands) {
+                if (custom_command.is_target_form()) {
+                    ConditionScope custom_scope(gen, custom_command.condition);
+                    emit_custom_command(custom_command);
+                }
+            }
+
             // TODO: support sources from other directories
             if (has_sources) {
-                cmd("source_group")("TREE", "${CMAKE_CURRENT_SOURCE_DIR}", "FILES", "${" + sources_var + "}").endl();
+                if (generated_output_sources.empty()) {
+                    cmd("source_group")("TREE", "${CMAKE_CURRENT_SOURCE_DIR}", "FILES", "${" + sources_var + "}").endl();
+                } else {
+                    // Generated outputs may live under the binary directory, which source_group(TREE ...) requires
+                    // to be nested inside CMAKE_CURRENT_SOURCE_DIR. Exclude them instead of failing the configure.
+                    auto source_group_var = target.name + "_SOURCE_GROUP_FILES";
+                    cmd("set")(source_group_var, "${" + sources_var + "}").endl();
+                    cmd("list")("REMOVE_ITEM", source_group_var, generated_output_sources).endl();
+                    cmd("source_group")("TREE", "${CMAKE_CURRENT_SOURCE_DIR}", "FILES", "${" + source_group_var + "}").endl();
+                }
             }
 
             if (!target.alias.empty()) {
@@ -1405,7 +1782,7 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
                 });
             };
 
-            auto link_libraries = [&](const parser::ConditionVector &cargs, const std::string &scope) {
+            auto link_cmd = [&](const char *command, const parser::ConditionVector &cargs, const std::string &scope) {
                 gen.handle_condition(cargs, [&](const std::string &, const std::vector<std::string> &args) {
                     std::vector<std::string> targs;
                     for (const std::string &arg : args) {
@@ -1421,34 +1798,38 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
                             targs.push_back(arg);
                         }
                     }
-                    cmd("target_link_libraries")(target.name, scope, targs);
+                    cmd(command)(target.name, scope, targs);
                 });
             };
 
             auto gen_target_cmds = [&](const parser::Target &t) {
-                target_cmd("target_compile_definitions", t.compile_definitions, target_scope);
-                target_cmd("target_compile_definitions", t.private_compile_definitions, "PRIVATE");
+                if (!is_custom_target) {
+                    target_cmd("target_compile_definitions", t.compile_definitions, target_scope);
+                    target_cmd("target_compile_definitions", t.private_compile_definitions, "PRIVATE");
 
-                target_cmd("target_compile_features", t.compile_features, target_scope);
-                target_cmd("target_compile_features", t.private_compile_features, "PRIVATE");
+                    target_cmd("target_compile_features", t.compile_features, target_scope);
+                    target_cmd("target_compile_features", t.private_compile_features, "PRIVATE");
 
-                target_cmd("target_compile_options", t.compile_options, target_scope);
-                target_cmd("target_compile_options", t.private_compile_options, "PRIVATE");
+                    target_cmd("target_compile_options", t.compile_options, target_scope);
+                    target_cmd("target_compile_options", t.private_compile_options, "PRIVATE");
 
-                target_cmd("target_include_directories", t.include_directories, target_scope);
-                target_cmd("target_include_directories", t.private_include_directories, "PRIVATE");
+                    target_cmd("target_include_directories", t.include_directories, target_scope);
+                    target_cmd("target_include_directories", t.private_include_directories, "PRIVATE");
 
-                target_cmd("target_link_directories", t.link_directories, target_scope);
-                target_cmd("target_link_directories", t.private_link_directories, "PRIVATE");
+                    target_cmd("target_link_directories", t.link_directories, target_scope);
+                    target_cmd("target_link_directories", t.private_link_directories, "PRIVATE");
 
-                link_libraries(t.link_libraries, target_scope);
-                link_libraries(t.private_link_libraries, "PRIVATE");
+                    link_cmd("target_link_libraries", t.link_libraries, target_scope);
+                    link_cmd("target_link_libraries", t.private_link_libraries, "PRIVATE");
 
-                target_cmd("target_link_options", t.link_options, target_scope);
-                target_cmd("target_link_options", t.private_link_options, "PRIVATE");
+                    target_cmd("target_link_options", t.link_options, target_scope);
+                    target_cmd("target_link_options", t.private_link_options, "PRIVATE");
 
-                target_cmd("target_precompile_headers", t.precompile_headers, target_scope);
-                target_cmd("target_precompile_headers", t.private_precompile_headers, "PRIVATE");
+                    target_cmd("target_precompile_headers", t.precompile_headers, target_scope);
+                    target_cmd("target_precompile_headers", t.private_precompile_headers, "PRIVATE");
+                }
+
+                link_cmd("add_dependencies", t.dependencies, "");
             };
 
             if (tmplate != nullptr) {

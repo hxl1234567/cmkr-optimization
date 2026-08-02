@@ -27,4 +27,4 @@ link-libraries = ["fmt::fmt"]
 
 This is equivalent to calling CMake's [FetchContent](https://cmake.org/cmake/help/latest/module/FetchContent.html).
 
-<sup><sub>This page was automatically generated from [tests/fetch-content/cmake.toml](https://gitee.com/hxl3/cmkr/tree/main/tests/fetch-content/cmake.toml).</sub></sup>
+<sup><sub>This page was automatically generated from [tests/fetch-content/cmake.toml](https://gitee.com/cmkr_lib/cmkr/tree/main/tests/fetch-content/cmake.toml).</sub></sup>

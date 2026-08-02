@@ -23,4 +23,4 @@ sources = ["src/basic.cpp"]
 
 Declares an executable target called `basic` with `src/basic.cpp` as a source file. Equivalent to CMake's [add_executable](https://cmake.org/cmake/help/latest/command/add_executable.html)`(basic src/basic.cpp)`.
 
-<sup><sub>This page was automatically generated from [tests/basic/cmake.toml](https://gitee.com/hxl3/cmkr/tree/main/tests/basic/cmake.toml).</sub></sup>
+<sup><sub>This page was automatically generated from [tests/basic/cmake.toml](https://gitee.com/cmkr_lib/cmkr/tree/main/tests/basic/cmake.toml).</sub></sup>

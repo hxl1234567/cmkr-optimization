@@ -7,7 +7,7 @@ nav_order: 3
 
 # Reference
 
-This page is a reference for the options in the `cmake.toml` file. If you think anything is missing or unclear, please [edit this page](https://github.com/build-cpp/cmkr/edit/main/docs/cmake-toml.md) or open an [issue](https://github.com/build-cpp/cmkr/issues).
+This page is a reference for the options in the `cmake.toml` file. If you think anything is missing or unclear, please [view this page](https://gitee.com/cmkr_lib/cmkr/blob/master/docs/cmake-toml.md) or open an [issue](https://gitee.com/cmkr_lib/cmkr/issues).
 
 This is a reference page. Check out the [examples](/examples) and the [cmkr topic](https://github.com/topics/cmkr) as well.
 {:.info}

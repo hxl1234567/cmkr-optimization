@@ -32,4 +32,4 @@ link-libraries = ["mylib::mylib"]
 
 As you can see in the example above you can use `**.ext` to glob recursively and `*.ext` to glob non-recursively. This **does not** generate `file(GLOB ...)` commands, but instead globs when cmkr is run. Files are sorted to give deterministic results regardless of the platform used.
 
-<sup><sub>This page was automatically generated from [tests/globbing/cmake.toml](https://gitee.com/hxl3/cmkr/tree/main/tests/globbing/cmake.toml).</sub></sup>
+<sup><sub>This page was automatically generated from [tests/globbing/cmake.toml](https://gitee.com/cmkr_lib/cmkr/tree/main/tests/globbing/cmake.toml).</sub></sup>

@@ -8,4 +8,4 @@ has_children: true
 
 # Examples
 
-The examples in this section are automatically generated from the [tests](https://github.com/build-cpp/cmkr/blob/main/tests/cmake.toml).
+The examples in this section are automatically generated from the [tests](https://gitee.com/cmkr_lib/cmkr/blob/main/tests/cmake.toml).
