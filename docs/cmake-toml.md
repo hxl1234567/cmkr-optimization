@@ -12,6 +12,8 @@ This page is a reference for the options in the `cmake.toml` file. If you think 
 This is a reference page. Check out the [examples](/examples) and the [cmkr topic](https://github.com/topics/cmkr) as well.
 {:.info}
 
+When you run `cmkr gen` in the root project, cmkr also creates a `CMKR_GUIDE.md` in the project root (first generation only — it is never overwritten), and the generated `CMakeLists.txt` header references it. It documents the project's build conventions and regeneration workflow.
+
 ## CMake configuration
 
 ```toml
