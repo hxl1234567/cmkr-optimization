@@ -1,11 +1,16 @@
-# [options] declared defaults must follow the toml on re-configure (shadow-default
-# pattern), while a user-set -D/cache value is preserved.
+# Projects with an [options] table must generate, configure and build. The
+# generated shadow-default block is compile-checked here (including the STRING
+# branch); the follow-the-new-default / preserve-user-cache-value behavior is
+# covered by manual verification, not by this test.
 
 [project]
 name = "options-shadow"
 
 [options]
 ENABLE_DEMO = false
+# "root" is the supported string option value; it exercises the STRING cache-type
+# branch of the shadow-default block (default ${CMKR_ROOT_PROJECT}).
+WEBSITE = "root"
 
 [target.demo]
 type = "executable"

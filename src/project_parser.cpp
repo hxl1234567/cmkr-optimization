@@ -512,6 +512,9 @@ Project::Project(const Project *parent, const std::string &path, bool build) : p
         for (const auto &itr : opts) {
             Option o;
             o.name = itr.first;
+            if (!Project::is_condition_name(o.name)) {
+                throw_key_error("Invalid option name '" + o.name + "'", o.name, itr.second);
+            }
             const auto &value = itr.second;
             if (value.is_boolean()) {
                 o.value = value.as_boolean();
@@ -770,6 +773,8 @@ Project::Project(const Project *parent, const std::string &path, bool build) : p
         const auto resolved_target_type = resolve_target_type(target, templates);
 
         t.optional("sources", target.sources);
+
+        t.optional("exclude-sources", target.exclude_sources);
 
         // Merge the headers into the sources
         ConditionVector headers;

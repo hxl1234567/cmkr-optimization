@@ -178,6 +178,11 @@ struct Target {
 
     ConditionVector sources;
 
+    // Files/globs to remove from the final source list (applied after glob expand).
+    // Lets a target built from a directory-glob template drop specific files
+    // (e.g. exclude a loader .cpp that defines a conflicting DriverEntry).
+    ConditionVector exclude_sources;
+
     // https://cmake.org/cmake/help/latest/manual/cmake-commands.7.html#project-commands
     ConditionVector compile_definitions;
     ConditionVector private_compile_definitions;
