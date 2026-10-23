@@ -335,8 +335,7 @@ struct Project {
     tsl::ordered_map<std::string, std::string> conditions;
     std::vector<Subdir> subdirs;
 
-    Project(const Project *parent, const std::string &path, bool build,
-            const tsl::ordered_map<std::string, std::string> *condition_seed = nullptr);
+    Project(const Project *parent, const std::string &path, bool build);
     const Project *root() const;
     bool cmake_minimum_version(int major, int minor) const;
     static bool is_condition_name(const std::string &name);

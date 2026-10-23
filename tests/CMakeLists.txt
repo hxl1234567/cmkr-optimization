@@ -179,16 +179,6 @@ add_test(
 
 add_test(
 	NAME
-		options-shadow
-	WORKING_DIRECTORY
-		"${CMAKE_CURRENT_LIST_DIR}/options-shadow"
-	COMMAND
-		"$<TARGET_FILE:cmkr>"
-		build
-)
-
-add_test(
-	NAME
 		modules
 	WORKING_DIRECTORY
 		"${CMAKE_CURRENT_LIST_DIR}/modules"
