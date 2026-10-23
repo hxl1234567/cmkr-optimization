@@ -1,0 +1,13 @@
+# [options] declared defaults must follow the toml on re-configure (shadow-default
+# pattern), while a user-set -D/cache value is preserved.
+
+[project]
+name = "options-shadow"
+
+[options]
+ENABLE_DEMO = false
+
+[target.demo]
+type = "executable"
+sources = ["main.cpp"]
+ENABLE_DEMO.compile-definitions = ["DEMO_ON"]

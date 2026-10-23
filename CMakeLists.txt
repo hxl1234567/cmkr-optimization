@@ -30,6 +30,11 @@ project(cmkr
 include("cmake/generate_documentation.cmake")
 include("cmake/generate_resources.cmake")
 
+if(MSVC)
+	add_compile_options("/utf-8")
+
+endif()
+
 # Subdirectory: third_party
 set(CMKR_CMAKE_FOLDER ${CMAKE_FOLDER})
 if(CMAKE_FOLDER)

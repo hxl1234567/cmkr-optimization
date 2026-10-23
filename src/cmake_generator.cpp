@@ -872,6 +872,36 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
                 cmd("configure_file")("cmake.toml", "cmake.toml", "COPYONLY");
             }
 
+            // Subdirectories with a [project] table are standalone cmkr roots. They are
+            // generated separately (see generate_subdir), so watch their cmake.toml here:
+            // editing one triggers a reconfigure, which runs cmkr() and regenerates the
+            // whole tree before add_subdirectory() reads the fresh files.
+            std::vector<std::string> subproject_tomls;
+            auto collect_subproject_toml = [&subproject_tomls](const fs::path &subdir) {
+                auto toml = subdir / "cmake.toml";
+                if (fs::exists(toml) && parser::is_root_path(subdir.string())) {
+                    subproject_tomls.push_back(toml.generic_string());
+                }
+            };
+            for (const auto &itr : project.project_subdirs) {
+                for (const auto &sub : itr.second) {
+                    collect_subproject_toml(sub);
+                }
+            }
+            for (const auto &subdir : project.subdirs) {
+                collect_subproject_toml(subdir.name);
+            }
+            if (!subproject_tomls.empty()) {
+                comment("Create configure-time dependencies on sub-project cmake.toml files");
+                if (project.cmake_minimum_version(3, 0)) {
+                    cmd("set_property")("DIRECTORY", "APPEND", "PROPERTY", "CMAKE_CONFIGURE_DEPENDS", subproject_tomls);
+                } else {
+                    for (const auto &toml : subproject_tomls) {
+                        cmd("configure_file")(toml, toml, "COPYONLY");
+                    }
+                }
+            }
+
             if (project.project_msvc_runtime != parser::msvc_last) {
                 cmd("if")("NOT", "DEFINED", "CMAKE_MSVC_RUNTIME_LIBRARY");
                 switch (project.project_msvc_runtime) {
@@ -940,7 +970,19 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
             } else {
                 default_val = mpark::get<1>(opt.value);
             }
-            cmd("option")(opt.name, RawArg(Command::quote(opt.help)), default_val);
+            const auto cache_type = opt.value.index() == 0 ? "BOOL" : "STRING";
+            const auto default_var = "CMKR_OPT_" + opt.name + "_DEFAULT";
+            const auto prev_var = "CMKR_OPT_" + opt.name + "_PREV";
+            // Shadow-default pattern: the toml-declared default lives in a plain
+            // variable, refreshed every configure. An untouched cache entry follows
+            // a changed default; a user-set (-D / cmake-gui) value is preserved.
+            cmd("set")(default_var, default_val);
+            cmd("if")("NOT", "DEFINED", opt.name);
+                cmd("set")(opt.name, RawArg("\"${" + default_var + "}\""), "CACHE", cache_type, RawArg(Command::quote(opt.help)), "FORCE");
+            cmd("elseif")(opt.name, "STREQUAL", RawArg("\"${" + prev_var + "}\""));
+                cmd("set")(opt.name, RawArg("\"${" + default_var + "}\""), "CACHE", cache_type, RawArg(Command::quote(opt.help)), "FORCE");
+            cmd("endif")();
+            cmd("set")(prev_var, RawArg("\"${" + default_var + "}\""), "CACHE", "INTERNAL", RawArg(Command::quote("cmkr option default tracking")), "FORCE");
         }
         endl();
     }
@@ -1433,10 +1475,22 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
                     }
                 }
             };
+            // Collect exclude-sources patterns (template + target, all conditions merged).
+            // Exclusion is global to the target: applied after glob expand.
+            std::vector<std::string> exclude_patterns;
+            auto collect_exclude = [&exclude_patterns](const parser::ConditionVector &ex) {
+                for (const auto &itr : ex) {
+                    for (const auto &p : itr.second) {
+                        exclude_patterns.push_back(p);
+                    }
+                }
+            };
             if (tmplate != nullptr) {
                 merge_sources(tmplate->outline.sources);
+                collect_exclude(tmplate->outline.exclude_sources);
             }
             merge_sources(target.sources);
+            collect_exclude(target.exclude_sources);
 
             // Generated outputs commonly live under the binary directory, which is not necessarily
             // nested inside the source directory (e.g. out-of-tree builds). Track them separately so
@@ -1489,6 +1543,17 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
                 if (sources.empty()) {
                     auto source_key = condition.empty() ? "sources" : (condition + ".sources");
                     throw_target_error(source_key + " wildcard found 0 files");
+                }
+
+                // Apply exclude-sources: expand patterns and drop matches from the
+                // final list. Patterns expand with the same root/path as sources, so
+                // both use identical relative/absolute normalization → string match.
+                if (!exclude_patterns.empty()) {
+                    auto excluded = expand_cmake_paths(exclude_patterns, path, is_root_project);
+                    tsl::ordered_set<std::string> exset(excluded.begin(), excluded.end());
+                    sources.erase(std::remove_if(sources.begin(), sources.end(),
+                        [&](const std::string &s) { return exset.find(s) != exset.end(); }),
+                        sources.end());
                 }
 
                 // Make sure there are source files for the languages used by the project
@@ -1974,7 +2039,8 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
                         entry_point = entry_found->second;
                     }
                     cmd("if")("MSVC");
-                    cmd("target_link_options")(target.name, "PRIVATE", "/SUBSYSTEM:WINDOWS /ENTRY:" + entry_point).endl();
+                    // 拆两个参数: 合并为单个带空格字符串会被引号包成整体 → LNK1117 语法错误
+                    cmd("target_link_options")(target.name, "PRIVATE", "/SUBSYSTEM:WINDOWS", "/ENTRY:" + entry_point).endl();
                     cmd("endif")().endl();
                     if (endif) {
                         cmd("endif")().endl();
@@ -2068,17 +2134,32 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
     }
 
     auto generate_subdir = [path, &project](const fs::path &sub) {
-        // Skip generating for subdirectories that have a cmake.toml with a [project] in it
+        // A nested root project (a subdirectory with a [project] table) regenerates its
+        // own subtree, so don't reach into it from here. Only proper ancestors are
+        // checked: the final directory itself is generated below.
         fs::path subpath;
+        fs::path ancestor;
         for (const auto &p : sub) {
+            ancestor = subpath;
             subpath /= p;
-            if (parser::is_root_path((path / subpath).string())) {
+            if (!ancestor.empty() && parser::is_root_path((path / ancestor).string())) {
                 return;
             }
         }
 
         subpath = path / sub;
-        if (fs::exists(subpath / "cmake.toml")) {
+        if (!fs::exists(subpath / "cmake.toml")) {
+            return;
+        }
+
+        // Subdirectories with a [project] table are standalone cmkr roots: generate them
+        // as roots (no parent) so their CMakeLists.txt keeps the bootstrap block and stays
+        // independently configurable. The root project registers a configure-time
+        // dependency on their cmake.toml (see root project generation) so editing one
+        // triggers a reconfigure, which runs cmkr() and regenerates this whole tree.
+        if (parser::is_root_path(subpath.string())) {
+            generate_cmake(subpath.string().c_str(), nullptr);
+        } else {
             generate_cmake(subpath.string().c_str(), &project);
         }
     };

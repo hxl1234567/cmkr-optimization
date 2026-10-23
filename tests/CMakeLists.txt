@@ -6,6 +6,11 @@ if(CMKR_ROOT_PROJECT)
 	configure_file(cmake.toml cmake.toml COPYONLY)
 endif()
 
+if(MSVC)
+	add_compile_options("/utf-8")
+
+endif()
+
 enable_testing()
 
 add_test(
@@ -157,6 +162,26 @@ add_test(
 		protobuf
 	WORKING_DIRECTORY
 		"${CMAKE_CURRENT_LIST_DIR}/protobuf"
+	COMMAND
+		"$<TARGET_FILE:cmkr>"
+		build
+)
+
+add_test(
+	NAME
+		subdir-projects
+	WORKING_DIRECTORY
+		"${CMAKE_CURRENT_LIST_DIR}/subdir-projects"
+	COMMAND
+		"$<TARGET_FILE:cmkr>"
+		build
+)
+
+add_test(
+	NAME
+		options-shadow
+	WORKING_DIRECTORY
+		"${CMAKE_CURRENT_LIST_DIR}/options-shadow"
 	COMMAND
 		"$<TARGET_FILE:cmkr>"
 		build
