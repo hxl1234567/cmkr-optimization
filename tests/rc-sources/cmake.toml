@@ -1,0 +1,8 @@
+# Resource scripts (.rc) are valid sources; the RC language is always enabled.
+
+[project]
+name = "rc-sources"
+
+[target.demo]
+type = "executable"
+sources = ["main.cpp", "demo.rc"]

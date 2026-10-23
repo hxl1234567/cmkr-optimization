@@ -107,3 +107,9 @@ name = "modules"
 working-directory = "modules"
 command = "$<TARGET_FILE:cmkr>"
 arguments = ["build"]
+
+[[test]]
+name = "rc-sources"
+working-directory = "rc-sources"
+command = "$<TARGET_FILE:cmkr>"
+arguments = ["build"]

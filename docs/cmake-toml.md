@@ -63,6 +63,8 @@ Supported languages are (see [`enable_language`](https://cmake.org/cmake/help/la
 
 After a language is enabled, adding sources files with the corresponding extension to your target will automatically use the appropriate compiler/assembler for it.
 
+Windows resource scripts (`.rc`) are valid sources; the `RC` language is always enabled for cmkr projects, so `sources = ["version.rc"]` works without extra configuration. Condition them with `windows.sources = [...]` for cross-platform projects.
+
 _Note_: It is generally discouraged to disable the `C` language, unless you are absolutely sure it is not used. Sometimes projects added with `fetch-content` implicitly require it and the error messages can be extremely confusing.
 
 ## Conditions
