@@ -183,6 +183,12 @@ struct Target {
     // (e.g. exclude a loader .cpp that defines a conflicting DriverEntry).
     ConditionVector exclude_sources;
 
+    // C++20 module interface units (.ixx/.cppm). Emitted as
+    // target_sources(<t> <scope> FILE_SET CXX_MODULES FILES ...), requires
+    // [cmake] version >= 3.25. They are removed from regular sources to avoid
+    // double-adding when a directory glob picks them up.
+    ConditionVector module_sources;
+
     // https://cmake.org/cmake/help/latest/manual/cmake-commands.7.html#project-commands
     ConditionVector compile_definitions;
     ConditionVector private_compile_definitions;

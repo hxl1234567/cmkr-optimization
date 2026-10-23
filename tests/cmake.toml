@@ -101,3 +101,9 @@ name = "options-shadow"
 working-directory = "options-shadow"
 command = "$<TARGET_FILE:cmkr>"
 arguments = ["build"]
+
+[[test]]
+name = "modules"
+working-directory = "modules"
+command = "$<TARGET_FILE:cmkr>"
+arguments = ["build"]

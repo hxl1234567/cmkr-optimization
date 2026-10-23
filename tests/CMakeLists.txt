@@ -186,3 +186,13 @@ add_test(
 		"$<TARGET_FILE:cmkr>"
 		build
 )
+
+add_test(
+	NAME
+		modules
+	WORKING_DIRECTORY
+		"${CMAKE_CURRENT_LIST_DIR}/modules"
+	COMMAND
+		"$<TARGET_FILE:cmkr>"
+		build
+)

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -1565,6 +1566,18 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
                         sources.end());
                 }
 
+                // .ixx/.cppm declared via module-sources must not double-appear in
+                // regular sources when a directory glob picks them up.
+                if (!target.module_sources.empty()) {
+                    sources.erase(std::remove_if(sources.begin(), sources.end(), [](const std::string &s) {
+                        const auto ends = [&s](const char *suffix) {
+                            const auto n = std::strlen(suffix);
+                            return s.size() >= n && s.compare(s.size() - n, n, suffix) == 0;
+                        };
+                        return ends(".ixx") || ends(".cppm");
+                    }), sources.end());
+                }
+
                 // Make sure there are source files for the languages used by the project
                 switch (resolved_target_type) {
                 case parser::target_executable:
@@ -1870,6 +1883,30 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
                 if (has_sources) {
                     cmd("target_sources")(target.name, target_type == parser::target_interface ? "INTERFACE" : "PRIVATE", "${" + sources_var + "}");
                 }
+            }
+
+            // C++20 module interface units -> FILE_SET CXX_MODULES
+            if (!target.module_sources.empty()) {
+                if (!project.cmake_minimum_version(3, 25)) {
+                    throw_target_error("module-sources requires [cmake] version >= 3.25 (FILE_SET CXX_MODULES)");
+                }
+                gen.handle_condition(target.module_sources, [&](const std::string &condition, const std::vector<std::string> &files) {
+                    auto expanded = expand_cmake_paths(files, path, is_root_project);
+                    if (expanded.empty()) {
+                        return;
+                    }
+                    ConditionScope module_scope(gen, condition);
+                    std::vector<RawArg> args;
+                    append_value(args, target.name);
+                    append_value(args, target_type == parser::target_interface ? std::string("INTERFACE") : std::string("PRIVATE"));
+                    append_keyword(args, "FILE_SET");
+                    append_value(args, std::string("CXX_MODULES"));
+                    append_keyword(args, "FILES");
+                    for (const auto &f : expanded) {
+                        append_value(args, f);
+                    }
+                    cmd("target_sources")(args).endl();
+                });
             }
 
             for (const auto &custom_command : custom_commands) {

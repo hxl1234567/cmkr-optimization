@@ -1,0 +1,13 @@
+# C++20 named modules via module-sources (FILE_SET CXX_MODULES). Requires CMake >= 3.25.
+
+[cmake]
+version = "3.25"
+
+[project]
+name = "modules"
+
+[target.demo]
+type = "executable"
+compile-features = ["cxx_std_20"]
+sources = ["main.cpp"]
+module-sources = ["math.ixx"]

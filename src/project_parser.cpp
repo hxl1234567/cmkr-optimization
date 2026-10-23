@@ -774,6 +774,8 @@ Project::Project(const Project *parent, const std::string &path, bool build) : p
 
         t.optional("sources", target.sources);
 
+        t.optional("module-sources", target.module_sources);
+
         t.optional("exclude-sources", target.exclude_sources);
 
         // Merge the headers into the sources
