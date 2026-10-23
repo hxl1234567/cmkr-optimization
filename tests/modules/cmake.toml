@@ -9,5 +9,5 @@ name = "modules"
 [target.demo]
 type = "executable"
 compile-features = ["cxx_std_20"]
-sources = ["main.cpp"]
+sources = ["main.cpp", "*.ixx"]
 module-sources = ["math.ixx"]

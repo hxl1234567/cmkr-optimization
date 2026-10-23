@@ -1572,7 +1572,16 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
                     sources.erase(std::remove_if(sources.begin(), sources.end(), [](const std::string &s) {
                         const auto ends = [&s](const char *suffix) {
                             const auto n = std::strlen(suffix);
-                            return s.size() >= n && s.compare(s.size() - n, n, suffix) == 0;
+                            if (s.size() < n) {
+                                return false;
+                            }
+                            for (std::size_t i = 0; i < n; i++) {
+                                auto a = std::tolower(static_cast<unsigned char>(s[s.size() - n + i]));
+                                if (a != std::tolower(static_cast<unsigned char>(suffix[i]))) {
+                                    return false;
+                                }
+                            }
+                            return true;
                         };
                         return ends(".ixx") || ends(".cppm");
                     }), sources.end());
@@ -1887,6 +1896,9 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
 
             // C++20 module interface units -> FILE_SET CXX_MODULES
             if (!target.module_sources.empty()) {
+                if (is_custom_target) {
+                    throw_target_error("module-sources is not supported for custom targets");
+                }
                 if (!project.cmake_minimum_version(3, 25)) {
                     throw_target_error("module-sources requires [cmake] version >= 3.25 (FILE_SET CXX_MODULES)");
                 }
@@ -1895,12 +1907,11 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
                     if (expanded.empty()) {
                         return;
                     }
-                    ConditionScope module_scope(gen, condition);
                     std::vector<RawArg> args;
                     append_value(args, target.name);
                     append_value(args, target_type == parser::target_interface ? std::string("INTERFACE") : std::string("PRIVATE"));
                     append_keyword(args, "FILE_SET");
-                    append_value(args, std::string("CXX_MODULES"));
+                    append_keyword(args, "CXX_MODULES");
                     append_keyword(args, "FILES");
                     for (const auto &f : expanded) {
                         append_value(args, f);
