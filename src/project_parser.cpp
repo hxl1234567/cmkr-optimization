@@ -309,7 +309,9 @@ static TargetType resolve_target_type(const Target &target, const std::vector<Te
     return target.type;
 }
 
-Project::Project(const Project *parent, const std::string &path, bool build) : parent(parent) {
+Project::Project(const Project *parent, const std::string &path, bool build,
+                 const tsl::ordered_map<std::string, std::string> *condition_seed)
+    : parent(parent) {
     const auto toml_path = fs::path(path) / "cmake.toml";
     if (!fs::exists(toml_path)) {
         throw std::runtime_error("File not found '" + toml_path.string() + "'");
@@ -385,6 +387,15 @@ Project::Project(const Project *parent, const std::string &path, bool build) : p
     } else {
         conditions = parent->conditions;
         templates = parent->templates;
+    }
+
+    // Standalone nested roots: seed the root project's condition table so option-derived
+    // and root-declared conditions are visible, while the sub project's own [conditions]
+    // (applied below) still win on name collisions.
+    if (condition_seed != nullptr) {
+        for (const auto &cond : *condition_seed) {
+            conditions.insert(cond);
+        }
     }
 
     if (checker.contains("conditions")) {

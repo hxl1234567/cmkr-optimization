@@ -4,7 +4,13 @@
 # the root project too. The root project also registers their `cmake.toml` as a
 # configure-time dependency, so editing one triggers a full regeneration.
 
+# Standalone roots are seeded with the root condition table (including conditions
+# derived from root `[options]`), while their own `[conditions]` still take precedence.
+
 [project]
 name = "subdir-projects"
+
+[options]
+ENABLE_ROOT_OPT = true
 
 [subdir.Sub]

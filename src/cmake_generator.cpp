@@ -770,7 +770,8 @@ static std::string vcpkg_escape_identifier(const std::string &name) {
     return escaped;
 }
 
-void generate_cmake(const char *path, const parser::Project *parent_project) {
+void generate_cmake(const char *path, const parser::Project *parent_project,
+                    const tsl::ordered_map<std::string, std::string> *condition_seed) {
     if (!fs::exists(fs::path(path) / "cmake.toml")) {
         throw std::runtime_error("No cmake.toml found!");
     }
@@ -778,7 +779,7 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
     // Root project doesn't have a parent
     auto is_root_project = parent_project == nullptr;
 
-    parser::Project project(parent_project, path, false);
+    parser::Project project(parent_project, path, false, condition_seed);
 
     tsl::ordered_set<std::string> flat_project_languages;
     for (const auto &itr : project.project_languages) {
@@ -2215,7 +2216,10 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
         // dependency on their cmake.toml (see root project generation) so editing one
         // triggers a reconfigure, which runs cmkr() and regenerates this whole tree.
         if (parser::is_root_path(subpath.string())) {
-            generate_cmake(subpath.string().c_str(), nullptr);
+            // Standalone nested roots keep no parent (independent configure), but are
+            // seeded with the root project's condition table so its option-derived
+            // conditions are visible inside the sub project.
+            generate_cmake(subpath.string().c_str(), nullptr, &project.conditions);
         } else {
             generate_cmake(subpath.string().c_str(), &project);
         }
