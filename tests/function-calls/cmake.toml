@@ -1,0 +1,18 @@
+# condition.function = [calls]: configure-time calls under a condition, each
+# guarded by if(COMMAND fn) — a missing function is skipped, not an error.
+
+[project]
+name = "function-calls"
+
+[conditions]
+mycond = "MYCOND STREQUAL ON"
+
+[target.demo]
+type = "executable"
+sources = ["main.cpp"]
+cmake-before = '''
+function(my_func arg)
+    message(STATUS "FUNC GOT: ${arg}")
+endfunction()
+'''
+mycond.function = ["my_func(\"hello\")", "ghost_function_that_does_not_exist()"]

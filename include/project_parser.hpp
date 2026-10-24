@@ -189,6 +189,11 @@ struct Target {
     // double-adding when a directory glob picks them up.
     ConditionVector module_sources;
 
+    // Configure-time function calls, emitted verbatim under their condition, each
+    // guarded by if(COMMAND <fn>) so optional functions (e.g. from fetch-content
+    // dependencies) can be tolerated. Entries must be full call expressions.
+    ConditionVector functions;
+
     // https://cmake.org/cmake/help/latest/manual/cmake-commands.7.html#project-commands
     ConditionVector compile_definitions;
     ConditionVector private_compile_definitions;

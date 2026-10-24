@@ -62,6 +62,7 @@ static const char *kCmkrGuideMarkdown = R"MARKER(# cmkr 构建配置指南
 - **根 cmake.toml** = 依赖([fetch-content])+ 子项目挂载([subdir])+ 根自身的 target 配置
 - 含 [project] 的子目录 = 独立 cmkr 根:条件/变量各自声明,互不下发、互不继承
 - C++20 模块接口(.ixx)用 `module-sources`(需 [cmake] version >= 3.25);.rc 直接写 sources
+- 条件调用函数: 条件名.function = ["fn(args)"] — 自动包 if(条件) 与 if(COMMAND fn) 存在性守卫(函数缺失静默跳过)
 
 ## 常用操作
 - 重新生成:仓库根 `cmkr gen`(或 gen_all.bat),或子目录内单独 `cmkr gen`
@@ -744,6 +745,29 @@ struct ConditionScope {
         }
     }
 };
+
+// Emit configure-time function calls under their condition, each guarded by
+// if(COMMAND <fn>) so calls into optional functions (e.g. provided by a
+// fetch-content dependency in dev mode only) are skipped instead of erroring.
+static void conditional_functions(Generator &gen, const parser::ConditionVector &functions) {
+    gen.handle_condition(functions, [&gen](const std::string &condition, const std::vector<std::string> &calls) {
+        for (const auto &call : calls) {
+            const auto open = call.find('(');
+            auto name = open == std::string::npos ? std::string() : call.substr(0, open);
+            const auto is_space = [](unsigned char ch) { return std::isspace(ch) != 0; };
+            while (!name.empty() && is_space(static_cast<unsigned char>(name.front()))) {
+                name.erase(name.begin());
+            }
+            while (!name.empty() && is_space(static_cast<unsigned char>(name.back()))) {
+                name.pop_back();
+            }
+            // NOTE: handle_condition already wraps this block in if(<condition>)
+            gen.cmd("if")(RawArg("COMMAND " + name)).endl();
+            gen.inject_cmake(call);
+            gen.cmd("endif")().endl();
+        }
+    });
+}
 
 static bool vcpkg_valid_identifier(const std::string &name) {
     // [a-z0-9]+(-[a-z0-9]+)*
@@ -2078,6 +2102,7 @@ void generate_cmake(const char *path, const parser::Project *parent_project) {
             }
             gen.conditional_includes(target.include_after);
             gen.conditional_cmake(target.cmake_after);
+            conditional_functions(gen, target.functions);
 
             // post-build: one POST_BUILD add_custom_command per entry; .bat/.cmd → cmd /c
             gen.handle_condition(target.post_build, [&](const std::string &, const std::vector<std::string> &commands) {

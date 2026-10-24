@@ -779,6 +779,24 @@ Project::Project(const Project *parent, const std::string &path, bool build)
 
         t.optional("exclude-sources", target.exclude_sources);
 
+        t.optional("function", target.functions);
+        for (const auto &itr : target.functions) {
+            for (const auto &call : itr.second) {
+                const auto open = call.find('(');
+                auto name = open == std::string::npos ? std::string() : call.substr(0, open);
+                const auto is_space = [](unsigned char ch) { return std::isspace(ch) != 0; };
+                while (!name.empty() && is_space(static_cast<unsigned char>(name.front()))) {
+                    name.erase(name.begin());
+                }
+                while (!name.empty() && is_space(static_cast<unsigned char>(name.back()))) {
+                    name.pop_back();
+                }
+                if (name.empty()) {
+                    throw_key_error("Invalid function entry (expected 'fn(args)'): '" + call + "'", "function", call);
+                }
+            }
+        }
+
         // Merge the headers into the sources
         ConditionVector headers;
         t.optional("headers", headers);

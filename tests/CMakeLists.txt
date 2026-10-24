@@ -196,3 +196,13 @@ add_test(
 		"$<TARGET_FILE:cmkr>"
 		build
 )
+
+add_test(
+	NAME
+		function-calls
+	WORKING_DIRECTORY
+		"${CMAKE_CURRENT_LIST_DIR}/function-calls"
+	COMMAND
+		"$<TARGET_FILE:cmkr>"
+		build
+)

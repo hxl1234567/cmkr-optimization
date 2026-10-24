@@ -107,3 +107,9 @@ name = "rc-sources"
 working-directory = "rc-sources"
 command = "$<TARGET_FILE:cmkr>"
 arguments = ["build"]
+
+[[test]]
+name = "function-calls"
+working-directory = "function-calls"
+command = "$<TARGET_FILE:cmkr>"
+arguments = ["build"]
