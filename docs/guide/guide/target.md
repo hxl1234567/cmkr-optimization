@@ -128,6 +128,10 @@ sources = [
 - **源文件**：`.c .cc .cpp .cxx .c++ .C .m .mm .rc .cu .hip .ispc .cs .java .swift .s .S .asm .nasm` 及 Fortran (`.f .f90 .for ...`)
 - **头文件**：`.h .hpp .hh .hxx .h++ .inl .ipp .txx`
 
+::: tip .rc 资源脚本
+Windows 资源脚本(`.rc`)是合法的 sources;`RC` 语言对本仓项目**始终自动启用**,`sources = ["version.rc"]` 无需额外配置。跨平台项目请用 `windows.sources = [...]` 条件前缀。
+:::
+
 ::: tip 裸目录 vs `dir/**`
 - `sources = ["src"]` → 只收源/头文件，自动忽略非源文件
 - `sources = ["src/**"]` → 收该目录下**所有**文件（含非源文件），不做扩展名过滤
@@ -209,6 +213,67 @@ add_custom_command(TARGET x POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_diffe
 :::
 
 支持条件前缀：`windows.post-build = [...]`。
+
+## exclude-sources：从最终源列表剔除
+
+glob/目录展开后,把匹配项从源列表删除(支持条件前缀,与 `exclude-sources` 同名机制):
+
+```toml
+[target.mydriver]
+type = "driver"
+sources = ["src"]
+exclude-sources = ["src/memLoadDriver.cpp"]   # 目录 glob 收进来, 再剔除冲突文件
+windows.exclude-sources = ["src/posix_*.cpp"]
+```
+
+剔除是**精确路径匹配**(展开后的相对/绝对路径逐字比对),发生在 glob 展开之后。
+
+## module-sources：C++20 模块接口
+
+`.ixx` / `.cppm` 模块接口单元,生成 `target_sources(<t> PRIVATE FILE_SET CXX_MODULES FILES ...)`:
+
+```toml
+[cmake]
+version = "3.25"          # FILE_SET CXX_MODULES 要求 CMake >= 3.25
+
+[target.webview]
+type = "static"
+module-sources = ["include/webview/app.ixx", "include/webview/*.ixx"]   # 支持通配
+```
+
+- `.ixx` / `.cppm` 声明在 `module-sources` 后会**自动从普通 sources 剔除**(目录 glob 双收录防护)
+- 编译器需 C++20+(`compile-features = ["cxx_std_20"]` 起)
+- `type = "custom"` 的 target 不支持,gen 直接报错
+
+## function：条件函数调用（configure 期）
+
+`条件名.function = [调用, ...]` — configure 期执行函数,gen 自动生成**双层守卫**:
+
+```toml
+[conditions]
+pack-assets = "NOT ENABLE_DEV STREQUAL ON"
+
+[target.Loader]
+pack-assets.function = ["webview_package_assets(Loader \"${CMAKE_SOURCE_DIR}/Loader\")"]
+```
+
+生成:
+
+```cmake
+if(NOT ENABLE_DEV STREQUAL ON)      # 你的条件
+	if(COMMAND webview_package_assets)   # 自动存在性守卫
+		webview_package_assets(Loader "${CMAKE_SOURCE_DIR}/Loader")
+	endif()
+endif()
+```
+
+| 语义 | 说明 |
+|------|------|
+| 条件包裹 | 复用 [conditions] 定义,支持 AND/OR/NOT 组合 |
+| `if(COMMAND fn)` 守卫 | 函数不存在时**静默跳过**(典型场景:fetch 的依赖仅在特定开关下定义该函数) |
+| 条目格式 | 必须是完整调用表达式 `fn(args)`,缺 `(` 直接报错 |
+
+不同条件 = 不同条目,平铺即"条件调用数组"。需要 else 分支的复杂逻辑仍用 `cmake-after`。
 
 ## win32-executable：GUI 子系统（人性化字段）
 

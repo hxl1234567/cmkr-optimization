@@ -130,6 +130,18 @@ sources = ["src/example.cpp"]
 
 `condition` 为假时整个 `add_executable` 不生成。
 
+条件还可以直接驱动**函数调用**——`条件名.function = [调用, ...]`,gen 自动生成 `if(条件)` + `if(COMMAND fn)` 双守卫:
+
+```toml
+[conditions]
+pack-assets = "NOT ENABLE_DEV STREQUAL ON"
+
+[target.Loader]
+pack-assets.function = ["webview_package_assets(Loader \"${CMAKE_SOURCE_DIR}/Loader\")"]
+```
+
+详见 [target · function](./target#function-条件函数调用-configure-期)。
+
 ## 注意事项
 
 - 条件键的键名**不能**与字段本身重复——`windows.windows` 无意义
